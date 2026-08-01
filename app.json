@@ -1,0 +1,65 @@
+{
+  "expo": {
+    "name": "SADA POS",
+    "slug": "sada-pos",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sadapos",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": false,
+    "icon": "./assets/brand/icon.png",
+    "splash": {
+      "image": "./assets/brand/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#202020"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.sada.pos"
+    },
+    "android": {
+      "package": "com.sada.pos",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/brand/adaptive-icon.png",
+        "backgroundColor": "#202020"
+      },
+      "permissions": [
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "./plugins/withBluetoothPermissions",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow SADA POS to access your photos to set menu item images."
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "145c354b-c767-4274-af17-891a5442ddc3"
+      }
+    },
+    "owner": "cornerstonesoftware"
+  }
+}

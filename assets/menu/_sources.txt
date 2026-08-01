@@ -1,0 +1,15 @@
+veg-manchurian|https://upload.wikimedia.org/wikipedia/commons/thumb/d/d0/Vegetable_manchurian.jpg/960px-Vegetable_manchurian.jpg
+chicken-65|https://upload.wikimedia.org/wikipedia/commons/thumb/3/3c/Chicken_65%2C_Kerala.jpg/960px-Chicken_65%2C_Kerala.jpg
+paneer-tikka|https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Paneer_tikka.jpg/960px-Paneer_tikka.jpg
+paneer-butter-masala|https://upload.wikimedia.org/wikipedia/commons/5/5c/Paneer_Makhani_Veggie.jpeg
+butter-chicken|https://upload.wikimedia.org/wikipedia/commons/thumb/4/41/Butter_Chicken_%26_Butter_Naan_-_Home_-_Chandigarh_-_India_-_0006.jpg/960px-Butter_Chicken_%26_Butter_Naan_-_Home_-_Chandigarh_-_India_-_0006.jpg
+dal-tadka|https://upload.wikimedia.org/wikipedia/commons/thumb/f/f0/Dal_Tadka-Delhi.jpg/960px-Dal_Tadka-Delhi.jpg
+veg-biryani|https://upload.wikimedia.org/wikipedia/commons/thumb/5/5a/%22Hyderabadi_Dum_Biryani%22.jpg/960px-%22Hyderabadi_Dum_Biryani%22.jpg
+chicken-biryani|https://upload.wikimedia.org/wikipedia/commons/thumb/7/7c/Hyderabadi_Chicken_Biryani.jpg/960px-Hyderabadi_Chicken_Biryani.jpg
+butter-naan|https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Annapurna_Naan.jpg/960px-Annapurna_Naan.jpg
+jeera-rice|https://upload.wikimedia.org/wikipedia/commons/thumb/5/5e/Jeera-rice.JPG/960px-Jeera-rice.JPG
+masala-chai|https://upload.wikimedia.org/wikipedia/commons/8/89/Chai_In_Sakora.jpg
+fresh-lime-soda|https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Nimbu_Pani.JPG/960px-Nimbu_Pani.JPG
+mango-lassi|https://upload.wikimedia.org/wikipedia/commons/thumb/4/4e/Mango_Lassi_.jpg/960px-Mango_Lassi_.jpg
+gulab-jamun|https://upload.wikimedia.org/wikipedia/commons/c/c1/Gulab-jamun-wallpaper-1.jpg
+gajar-halwa|https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/Delicious_Gajar_Ka_Halwa.jpg/960px-Delicious_Gajar_Ka_Halwa.jpg

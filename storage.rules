@@ -1,0 +1,23 @@
+rules_version = '2';
+
+// Menu item images. Readable by any signed-in user (they render in-app via
+// download URLs); writable ONLY by that restaurant's own admin/cashier — the
+// cross-service firestore.get reads the caller's profile doc inside the same
+// restaurant, so one tenant can never overwrite another tenant's images.
+// Enforce image content type and a 5MB cap.
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /restaurants/{restaurantId}/menu/{itemId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*')
+        && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid)).data.role in ['admin', 'cashier']
+        && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid)).data.status == 'approved'
+        && firestore.get(/databases/(default)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid)).data.active == true;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

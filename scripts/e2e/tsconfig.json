@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "target": "es2022",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/lib/firebase": ["./firebase-shim.ts"],
+      "expo-crypto": ["./expo-crypto-shim.ts"],
+      "@/*": ["../../src/*"]
+    }
+  }
+}
