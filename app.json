@@ -50,7 +50,9 @@
             "kotlinVersion": "1.9.25"
           }
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font"
     ],
     "extra": {
       "router": {
