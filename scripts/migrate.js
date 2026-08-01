@@ -15,7 +15,8 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const admin = require("firebase-admin");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
 
 const SERVICE_ACCOUNT_PATH = path.join(__dirname, "serviceAccount.json");
 const RESTAURANT_ID =
@@ -36,10 +37,10 @@ async function main() {
     console.error("Missing scripts/serviceAccount.json — see seed.js header.");
     process.exit(1);
   }
-  admin.initializeApp({
-    credential: admin.credential.cert(require(SERVICE_ACCOUNT_PATH)),
+  initializeApp({
+    credential: cert(require(SERVICE_ACCOUNT_PATH)),
   });
-  const db = admin.firestore();
+  const db = getFirestore();
 
   const rootRef = db.doc(`restaurants/${RESTAURANT_ID}`);
   const root = await rootRef.get();

@@ -10,7 +10,9 @@
  */
 const fs = require("fs");
 const path = require("path");
-const admin = require("firebase-admin");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
+const { getAuth } = require("firebase-admin/auth");
 
 const SERVICE_ACCOUNT_PATH = path.join(__dirname, "serviceAccount.json");
 const RESTAURANT_ID = process.env.EXPO_PUBLIC_RESTAURANT_ID || "sada-main";
@@ -20,10 +22,10 @@ async function main() {
     console.error("Missing scripts/serviceAccount.json — see seed.js header.");
     process.exit(1);
   }
-  admin.initializeApp({
-    credential: admin.credential.cert(require(SERVICE_ACCOUNT_PATH)),
+  initializeApp({
+    credential: cert(require(SERVICE_ACCOUNT_PATH)),
   });
-  const db = admin.firestore();
+  const db = getFirestore();
 
   // 1. Profile docs (+ their multi-tenant userIndex entries)
   const usersCol = db.collection(`restaurants/${RESTAURANT_ID}/users`);
@@ -41,10 +43,10 @@ async function main() {
   let pageToken;
   let authCount = 0;
   do {
-    const page = await admin.auth().listUsers(1000, pageToken);
+    const page = await getAuth().listUsers(1000, pageToken);
     for (const u of page.users) {
       console.log(`  deleting auth user ${u.uid} (${u.email ?? "no email"})`);
-      await admin.auth().deleteUser(u.uid);
+      await getAuth().deleteUser(u.uid);
       await db.doc(`userIndex/${u.uid}`).delete(); // orphaned index, if any
       authCount++;
     }

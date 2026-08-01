@@ -19,7 +19,9 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const admin = require("firebase-admin");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getAuth } = require("firebase-admin/auth");
 
 const SERVICE_ACCOUNT_PATH = path.join(__dirname, "serviceAccount.json");
 const RESTAURANT_ID = process.env.EXPO_PUBLIC_RESTAURANT_ID || "sada-main";
@@ -110,7 +112,7 @@ async function seedRestaurantProfile(db) {
       addressLine: "Bengaluru, Karnataka",
       gstEnabled: true,
       joinCode,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true }
   );
@@ -125,11 +127,11 @@ async function seedStaff(db) {
   for (const staff of STAFF) {
     let userRecord;
     try {
-      userRecord = await admin.auth().getUserByEmail(staff.email);
+      userRecord = await getAuth().getUserByEmail(staff.email);
       console.log(`= ${staff.email} already exists (uid ${userRecord.uid}) — updating profile`);
     } catch (err) {
       if (err.code !== "auth/user-not-found") throw err;
-      userRecord = await admin.auth().createUser({
+      userRecord = await getAuth().createUser({
         email: staff.email,
         password: STAFF_PASSWORD,
         displayName: staff.name,
@@ -148,7 +150,7 @@ async function seedStaff(db) {
         role: staff.role,
         status: "approved",
         active: true,
-        ...(existing.exists ? {} : { createdAt: admin.firestore.FieldValue.serverTimestamp() }),
+        ...(existing.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
       },
       { merge: true }
     );
@@ -216,7 +218,7 @@ async function seedTables(db) {
         status: "available",
         currentOrderId: null,
         mergedInto: null,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
@@ -238,12 +240,12 @@ async function main() {
 
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
 
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+  initializeApp({
+    credential: cert(serviceAccount),
     projectId: serviceAccount.project_id,
   });
 
-  const db = admin.firestore();
+  const db = getFirestore();
 
   console.log(`Seeding project "${serviceAccount.project_id}", tenant "${RESTAURANT_ID}"...`);
 

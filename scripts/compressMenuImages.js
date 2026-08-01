@@ -24,7 +24,9 @@
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
-const admin = require("firebase-admin");
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getFirestore } = require("firebase-admin/firestore");
+const { getStorage } = require("firebase-admin/storage");
 const sharp = require("sharp");
 
 const SERVICE_ACCOUNT_PATH = path.join(__dirname, "serviceAccount.json");
@@ -60,7 +62,7 @@ async function processItem(db, doc) {
     return { saved: 0 };
   }
 
-  const file = admin.storage().bucket(parsed.bucket).file(parsed.objectPath);
+  const file = getStorage().bucket(parsed.bucket).file(parsed.objectPath);
 
   let original;
   try {
@@ -121,12 +123,12 @@ async function main() {
   }
 
   const serviceAccount = require(SERVICE_ACCOUNT_PATH);
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount),
+  initializeApp({
+    credential: cert(serviceAccount),
     projectId: serviceAccount.project_id,
   });
 
-  const db = admin.firestore();
+  const db = getFirestore();
   console.log(
     `Compressing menu images for project "${serviceAccount.project_id}", ` +
       `tenant "${RESTAURANT_ID}"${DRY_RUN ? " (dry run)" : ""}...\n`
