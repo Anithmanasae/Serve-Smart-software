@@ -6,7 +6,6 @@
     "orientation": "portrait",
     "scheme": "sadapos",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
     "icon": "./assets/brand/icon.png",
     "splash": {
       "image": "./assets/brand/logo.png",
@@ -43,16 +42,9 @@
           "photosPermission": "Allow SADA POS to access your photos to set menu item images."
         }
       ],
-      [
-        "expo-build-properties",
-        {
-          "android": {
-            "kotlinVersion": "1.9.25"
-          }
-        }
-      ],
       "expo-asset",
-      "expo-font"
+      "expo-font",
+      "expo-image"
     ],
     "extra": {
       "router": {
