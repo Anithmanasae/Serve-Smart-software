@@ -1,7 +1,7 @@
 /**
  * Add / Edit menu item modal form. Reuses the ported menuApi writes:
  *   - createMenuItem / updateMenuItem
- *   - uploadMenuItemImage (create the item first to obtain its id)
+ *   - setMenuItemImage (create the item first to obtain its id)
  *
  * Price is entered in rupees (₹) and stored as paise via rupeesToPaise.
  */
@@ -27,8 +27,9 @@ import { colors, radius, space } from "@/theme/theme";
 import type { MenuCategory, MenuItem } from "@/types/models";
 import {
   createMenuItem,
+  setMenuItemImage,
   updateMenuItem,
-  uploadMenuItemImage,
+  MAX_IMAGE_DATA_URI_BYTES,
   type MenuItemInput,
 } from "./menuApi";
 import type { MenuCategoryDoc, MenuItemDoc } from "./useMenuData";
@@ -50,34 +51,70 @@ function paiseToRupeeString(paise: number): string {
 }
 
 /**
- * Menu card thumbnails render at ~140-200pt, so anything beyond this edge
- * length is wasted Storage space and download time on restaurant Wi-Fi.
+ * Successive (longest-edge, JPEG quality) attempts, each cheaper than the last.
+ *
+ * Menu card thumbnails render at ~140-200pt, so the first step is already
+ * generous — a typical 3-4 MB camera photo lands around 60-120 KB raw
+ * (~80-160 KB base64), comfortably inside MAX_IMAGE_DATA_URI_BYTES. The later
+ * steps only ever run for pathological inputs (huge panoramas, noisy photos
+ * that resist compression), where giving up some sharpness beats refusing the
+ * photo outright.
  */
-const MAX_IMAGE_DIM = 800;
+const ENCODE_STEPS: ReadonlyArray<{ dim: number; quality: number }> = [
+  { dim: 800, quality: 0.7 },
+  { dim: 640, quality: 0.6 },
+  { dim: 512, quality: 0.5 },
+  { dim: 400, quality: 0.4 },
+];
 
 /**
- * Downscale the picked photo to at most MAX_IMAGE_DIM on its longest edge and
- * re-encode as JPEG at 70% quality. A typical 3-4 MB camera photo comes out
- * around 60-120 KB, which keeps Firebase Storage usage small while staying
- * sharp at menu-card size.
+ * Downscale + re-encode the picked photo as a base64 JPEG data URI small
+ * enough to live inside the menu item's Firestore document.
+ *
+ * Photos are stored in Firestore rather than Firebase Storage (see
+ * `setMenuItemImage`), so the encoded string — not the file — is what has to
+ * fit. Each step is tried in turn and the first one under budget wins.
  */
-async function compressMenuImage(
+async function encodeMenuImage(
   asset: ImagePicker.ImagePickerAsset
-): Promise<string> {
-  const needsResize =
-    asset.width > MAX_IMAGE_DIM || asset.height > MAX_IMAGE_DIM;
-  const actions: ImageManipulator.Action[] = needsResize
-    ? [
-        asset.width >= asset.height
-          ? { resize: { width: MAX_IMAGE_DIM } }
-          : { resize: { height: MAX_IMAGE_DIM } },
-      ]
-    : [];
-  const result = await ImageManipulator.manipulateAsync(asset.uri, actions, {
-    compress: 0.7,
-    format: ImageManipulator.SaveFormat.JPEG,
-  });
-  return result.uri;
+): Promise<{ previewUri: string; dataUri: string }> {
+  let smallest: { previewUri: string; dataUri: string } | null = null;
+
+  for (const step of ENCODE_STEPS) {
+    const needsResize = asset.width > step.dim || asset.height > step.dim;
+    const actions: ImageManipulator.Action[] = needsResize
+      ? [
+          asset.width >= asset.height
+            ? { resize: { width: step.dim } }
+            : { resize: { height: step.dim } },
+        ]
+      : [];
+    const result = await ImageManipulator.manipulateAsync(asset.uri, actions, {
+      compress: step.quality,
+      format: ImageManipulator.SaveFormat.JPEG,
+      base64: true,
+    });
+    if (!result.base64) continue;
+
+    const encoded = {
+      previewUri: result.uri,
+      dataUri: `data:image/jpeg;base64,${result.base64}`,
+    };
+    if (encoded.dataUri.length <= MAX_IMAGE_DATA_URI_BYTES) return encoded;
+    smallest = encoded;
+
+    // An image already under the step's edge length is not resized, so every
+    // remaining step would re-encode at the same dimensions — only quality
+    // would drop. Keep going; quality alone is usually enough.
+  }
+
+  throw new Error(
+    smallest
+      ? `This photo is too detailed to store (still ${Math.round(
+          smallest.dataUri.length / 1024
+        )} KB after compression). Try a simpler or less zoomed-in shot.`
+      : "Could not read that image. Try a different photo."
+  );
 }
 
 export function MenuItemForm({
@@ -93,10 +130,16 @@ export function MenuItemForm({
   const [description, setDescription] = useState("");
   const [sku, setSku] = useState("");
   const [enabled, setEnabled] = useState(true);
-  const [localImageUri, setLocalImageUri] = useState<string | null>(null);
+  // The freshly picked photo, already encoded: `previewUri` is a local file
+  // for cheap on-device preview, `dataUri` is what gets written to Firestore.
+  const [pendingImage, setPendingImage] = useState<{
+    previewUri: string;
+    dataUri: string;
+  } | null>(null);
   const [existingImageUrl, setExistingImageUrl] = useState<string | undefined>(
     undefined
   );
+  const [encoding, setEncoding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
@@ -125,10 +168,11 @@ export function MenuItemForm({
     setDescription(item?.description ?? "");
     setSku(item?.sku ?? "");
     setEnabled(item?.enabled ?? true);
-    setLocalImageUri(null);
+    setPendingImage(null);
     setExistingImageUrl(item?.imageUrl);
     setError(null);
     setSaving(false);
+    setEncoding(false);
   }, [visible, item, defaultCategoryId]);
 
   const pickImage = async () => {
@@ -139,20 +183,26 @@ export function MenuItemForm({
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      // Full quality here — compressMenuImage does the single lossy encode,
+      // Full quality here — encodeMenuImage does the single lossy encode,
       // avoiding double JPEG artifacts.
       quality: 1,
       allowsEditing: true,
       aspect: [1, 1],
     });
-    if (!result.canceled && result.assets.length > 0) {
-      const asset = result.assets[0];
-      try {
-        setLocalImageUri(await compressMenuImage(asset));
-      } catch {
-        // Compression is an optimization; fall back to the original photo.
-        setLocalImageUri(asset.uri);
-      }
+    if (result.canceled || result.assets.length === 0) return;
+
+    setError(null);
+    setEncoding(true);
+    try {
+      setPendingImage(await encodeMenuImage(result.assets[0]));
+    } catch (e) {
+      // Unlike the old Storage upload there is no raw-file fallback: a local
+      // `file://` path written to Firestore would render on this device and
+      // be a broken image on every other one. Drop the photo instead.
+      setPendingImage(null);
+      setError(e instanceof Error ? e.message : "Could not process that image.");
+    } finally {
+      setEncoding(false);
     }
   };
 
@@ -172,8 +222,8 @@ export function MenuItemForm({
         imageUrl: existingImageUrl,
       };
 
-      // Create the item first (to obtain an id) so the image can be uploaded
-      // under that id, then persist the download URL onto the item.
+      // Create the item first (to obtain an id) so the photo can be written
+      // against that id in a second, separate update.
       const itemId =
         item?.id ?? createdIdRef.current ?? (await createMenuItem(base));
       createdIdRef.current = itemId;
@@ -181,20 +231,17 @@ export function MenuItemForm({
         await updateMenuItem(itemId, base);
       }
 
-      // Photo upload is best-effort: the item is already saved, so a Storage
-      // failure (e.g. Storage not enabled on the Firebase project) must not
-      // block the menu edit — save without the photo and tell the user.
-      if (localImageUri) {
+      // The photo write is best-effort: the item is already saved, so a
+      // failure here must not block the menu edit — keep the item and tell
+      // the user the photo did not stick.
+      if (pendingImage) {
         try {
-          const blob = await (await fetch(localImageUri)).blob();
-          await uploadMenuItemImage(itemId, blob);
+          await setMenuItemImage(itemId, pendingImage.dataUri);
         } catch (e) {
           const detail = e instanceof Error ? e.message : String(e);
           Alert.alert(
             "Item saved without photo",
-            detail.includes("storage/")
-              ? "Photo uploads aren't available — Firebase Storage isn't set up on this project yet. The item was saved without its photo."
-              : `The item was saved, but the photo upload failed: ${detail}`
+            `The item was saved, but the photo could not be stored: ${detail}`
           );
         }
       }
@@ -206,7 +253,7 @@ export function MenuItemForm({
     }
   };
 
-  const previewUri = localImageUri ?? existingImageUrl;
+  const previewUri = pendingImage?.previewUri ?? existingImageUrl;
 
   return (
     <Modal
@@ -241,8 +288,14 @@ export function MenuItemForm({
                 pressed && styles.pressed,
               ]}
               onPress={pickImage}
+              disabled={encoding}
             >
-              {previewUri ? (
+              {encoding ? (
+                <View style={styles.imageEmpty}>
+                  <ActivityIndicator color={colors.textMuted} />
+                  <Text style={styles.imageEmptyText}>Processing…</Text>
+                </View>
+              ) : previewUri ? (
                 <Image
                   style={styles.imagePreview}
                   source={{ uri: previewUri }}
@@ -257,7 +310,7 @@ export function MenuItemForm({
                 </View>
               )}
             </Pressable>
-            {previewUri ? (
+            {previewUri && !encoding ? (
               <Pressable
                 hitSlop={8}
                 style={({ pressed }) => pressed && styles.pressed}

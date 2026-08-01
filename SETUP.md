@@ -26,8 +26,11 @@ EXPO_PUBLIC_RESTAURANT_ID=sada-main
 > `EXPO_PUBLIC_RESTAURANT_ID` is only a **dev-build fallback** for logins that
 > predate the migration (see `npm run migrate`).
 
-Make sure these are enabled in the console: **Firestore Database**,
-**Authentication → Email/Password**, **Storage**.
+Make sure these are enabled in the console: **Firestore Database** and
+**Authentication → Email/Password**. Firebase **Storage is not required** —
+menu photos are downscaled and stored as base64 JPEG data URIs inside the menu
+item document (see `setMenuItemImage`), which keeps the project on the free
+Spark plan.
 
 > These are public client identifiers — safe to keep in the repo's `.env.local`
 > (which is gitignored). Real security is the Firestore Rules + Auth.
@@ -42,7 +45,7 @@ The rules are the app's server-side security boundary — deploy them before rea
 npm i -g firebase-tools        # once
 firebase login
 firebase use your-project-id   # or: firebase use --add
-firebase deploy --only firestore:rules,firestore:indexes,storage
+firebase deploy --only firestore:rules,firestore:indexes
 ```
 
 ---
@@ -72,14 +75,14 @@ npm i -D firebase-admin        # already in devDependencies; runs on npm install
 npm run seed
 ```
 
-Seeded logins (password `sadapos123` — change these afterwards):
+Seeded logins (password `Sada@1234` — change these afterwards):
 
-| Role    | Email             | Lands on   |
-|---------|-------------------|------------|
-| admin   | admin@sada.test   | Insights   |
-| waiter  | waiter@sada.test  | Tables     |
-| cashier | cashier@sada.test | Bills      |
-| kitchen | kitchen@sada.test | KDS        |
+| Role    | Email                 | Lands on   |
+|---------|-----------------------|------------|
+| admin   | admin@sada-pos.test   | Insights   |
+| waiter  | waiter@sada-pos.test  | Tables     |
+| cashier | cashier@sada-pos.test | Bills      |
+| kitchen | kitchen@sada-pos.test | KDS        |
 
 ---
 

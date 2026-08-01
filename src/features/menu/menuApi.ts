@@ -13,13 +13,7 @@ import {
   setDoc,
   updateDoc,
 } from "firebase/firestore";
-import {
-  getDownloadURL,
-  ref as storageRef,
-  uploadBytes,
-} from "firebase/storage";
-import { getActiveRestaurantId, paths } from "@/lib/firestore/paths";
-import { storage } from "@/lib/firebase";
+import { paths } from "@/lib/firestore/paths";
 import type { MenuCategory, MenuItem } from "@/types/models";
 
 // ── Menu items ───────────────────────────────────────────────────────────────
@@ -64,23 +58,45 @@ export async function deleteMenuItem(id: string): Promise<void> {
 }
 
 /**
- * Upload an image to Firebase Storage at
- * `restaurants/{restaurantId}/menu/{itemId}/{filename}` and persist the
- * resulting download URL to the item's `imageUrl`. Returns the URL.
+ * A Firestore document is hard-capped at 1 MiB *including* field names and
+ * overhead, so the encoded photo is held well under that to leave room for the
+ * item's own fields. Base64 costs ~33% over the raw JPEG bytes, so this budget
+ * corresponds to roughly a 450 KB JPEG.
  */
-export async function uploadMenuItemImage(
+export const MAX_IMAGE_DATA_URI_BYTES = 600 * 1024;
+
+/**
+ * Persist a menu photo as a base64 JPEG data URI on the item's `imageUrl`.
+ *
+ * Photos live INSIDE the Firestore document rather than in a Firebase Storage
+ * bucket — that keeps the project on the free Spark plan (Storage requires
+ * Blaze) and means one write, not an upload plus a download-URL round trip.
+ * The trade-off is that every read of a menu item carries its photo, so the
+ * caller MUST downscale and compress first (see `encodeMenuImage` in
+ * MenuItemForm); this function only enforces the ceiling.
+ *
+ * `resolveMenuImage` and the item cards pass `imageUrl` straight to
+ * expo-image as `{ uri }`, which accepts a `data:` URI unchanged — so nothing
+ * on the render side needs to know the difference.
+ */
+export async function setMenuItemImage(
   itemId: string,
-  blob: Blob,
-  fileName = `${Date.now()}.jpg`
+  dataUri: string
 ): Promise<string> {
-  // In React Native the caller turns a local image uri into a Blob first:
-  //   const blob = await (await fetch(uri)).blob();
-  const path = `restaurants/${getActiveRestaurantId()}/menu/${itemId}/${fileName}`;
-  const objectRef = storageRef(storage, path);
-  await uploadBytes(objectRef, blob);
-  const url = await getDownloadURL(objectRef);
-  await updateMenuItem(itemId, { imageUrl: url });
-  return url;
+  if (!dataUri.startsWith("data:image/")) {
+    throw new Error(
+      "Menu photo must be a base64 data URI — got a plain path, which would " +
+        "only resolve on the device that uploaded it."
+    );
+  }
+  if (dataUri.length > MAX_IMAGE_DATA_URI_BYTES) {
+    throw new Error(
+      `Photo is too large to store (${Math.round(dataUri.length / 1024)} KB ` +
+        `encoded, limit ${Math.round(MAX_IMAGE_DATA_URI_BYTES / 1024)} KB).`
+    );
+  }
+  await updateMenuItem(itemId, { imageUrl: dataUri });
+  return dataUri;
 }
 
 // ── Menu categories ──────────────────────────────────────────────────────────
