@@ -7,7 +7,9 @@ screens are being rebuilt in React Native.
 
 ## Stack
 
-- Expo SDK 52, React Native 0.76, React 18.3, TypeScript (strict).
+- Expo SDK 57, React Native 0.86, React 19.2, TypeScript (strict).
+  The New Architecture (bridgeless) is mandatory from SDK 55 on — there is
+  no legacy-architecture opt-out.
 - Routing: **expo-router** (file-based, in `app/`).
 - Firebase **JS SDK** (`firebase`) — NOT `@react-native-firebase` — so it runs
   in Expo Go. Auth uses AsyncStorage persistence (already set up).
