@@ -1,6 +1,6 @@
 import { Redirect, Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { StyleSheet } from "react-native";
+import { StyleSheet, type ColorValue } from "react-native";
 import { BlurView } from "expo-blur";
 import { useAuth } from "@/features/auth/AuthContext";
 import { ROLE_ACCESS } from "@/features/auth/roleRoutes";
@@ -12,7 +12,15 @@ type IconName = keyof typeof Ionicons.glyphMap;
 // Outline glyph when inactive, filled (brand-tinted) when active.
 const icon =
   (name: IconName) =>
-  ({ color, size, focused }: { color: string; size: number; focused: boolean }) => (
+  ({
+    color,
+    size,
+    focused,
+  }: {
+    color: ColorValue;
+    size: number;
+    focused: boolean;
+  }) => (
     <Ionicons
       name={focused ? name : (`${name}-outline` as IconName)}
       size={size}
