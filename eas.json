@@ -21,6 +21,17 @@
     "production": {
       "autoIncrement": true,
       "environment": "production"
+    },
+    "demo": {
+      "extends": "preview",
+      "distribution": "internal",
+      "environment": "preview",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_DEMO_MODE": "true"
+      }
     }
   },
   "submit": {

@@ -66,7 +66,7 @@ export function ReceiptDetailsCard() {
           setName(t);
           setDirty(true);
         }}
-        placeholder={loading ? "Loading…" : "e.g. SADA Restaurant"}
+        placeholder={loading ? "Loading…" : "e.g. Smart Serve Restaurant"}
         placeholderTextColor={colors.textMuted}
         maxLength={60}
         editable={!saving}

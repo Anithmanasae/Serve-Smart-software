@@ -1,10 +1,10 @@
 /**
- * SADA POS design tokens for React Native — the JS equivalent of the old
+ * Smart Serve design tokens for React Native — the JS equivalent of the old
  * theme.css. Navy primary, white cards on a light-gray canvas, rounded
  * corners. Screens: import from here, never hardcode colors/spacing.
  */
 export const colors = {
-  primary: "#0047A1", // SADA navy (buttons, active nav, links)
+  primary: "#0047A1", // Smart Serve navy (buttons, active nav, links)
   primaryDark: "#00336F",
   primarySoft: "#e6eefb", // selected card / active nav background
   accentBlue: "#1565C0", // KDS "Start" / urgent

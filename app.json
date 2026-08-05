@@ -1,18 +1,12 @@
 {
   "expo": {
-    "name": "SADA POS",
+    "name": "Smart Serve",
     "slug": "sada-pos",
     "version": "0.1.0",
     "orientation": "portrait",
     "scheme": "sadapos",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
     "icon": "./assets/brand/icon.png",
-    "splash": {
-      "image": "./assets/brand/logo.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#202020"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.sada.pos"
@@ -21,7 +15,7 @@
       "package": "com.sada.pos",
       "adaptiveIcon": {
         "foregroundImage": "./assets/brand/adaptive-icon.png",
-        "backgroundColor": "#202020"
+        "backgroundColor": "#00336F"
       },
       "permissions": [
         "android.permission.BLUETOOTH_CONNECT",
@@ -40,15 +34,15 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow SADA POS to access your photos to set menu item images."
+          "photosPermission": "Allow Smart Serve to access your photos to set menu item images."
         }
       ],
       [
-        "expo-build-properties",
+        "expo-splash-screen",
         {
-          "android": {
-            "kotlinVersion": "1.9.25"
-          }
+          "image": "./assets/brand/logo.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#00336F"
         }
       ]
     ],

@@ -1,7 +1,7 @@
 rules_version = '2';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SADA POS — Firestore Security Rules (multi-tenant SaaS)
+// Smart Serve — Firestore Security Rules (multi-tenant SaaS)
 //
 // With no Cloud Functions, THESE RULES ARE THE SERVER-SIDE SECURITY BOUNDARY.
 // They run on Google's servers and cannot be bypassed by tampering with the
@@ -15,6 +15,10 @@ rules_version = '2';
 //     the restaurant's real join code; the cashier approves them. Exactly one
 //     cashier can ever self-claim per restaurant via meta/bootstrap.
 //   - pending/denied/restricted accounts can read nothing but their own profile
+//   - TRIAL EXPIRY: an account or workspace carrying `expiresAt` stops working
+//     once request.time passes it. NO `expiresAt` FIELD = NEVER EXPIRES, so
+//     every existing (permanent) account is completely unaffected by this
+//     ruleset. Clients can never write, change or clear the field.
 //
 // MULTI-TENANT: every app doc lives under restaurants/{restaurantId}, and every
 // role check reads the caller's profile under THAT restaurant — a member of
@@ -89,9 +93,78 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid)).data;
       }
 
-      // A usable account = cashier-approved signup that isn't restricted today.
+      // ---- trial expiry ----------------------------------------------------
+      // ABSENT FIELD = NEVER EXPIRES. This is the whole safety property: a
+      // permanent account has no `expiresAt`, so `!('expiresAt' in …)` is true
+      // and the `||` SHORT-CIRCUITS — the timestamp comparison is never even
+      // evaluated for a paying customer. The check is never written the other
+      // way round ("expiresAt must be in the future"), because that form locks
+      // out every existing account the moment it deploys.
+      //
+      // Compared against request.time — GOOGLE'S clock, evaluated server-side.
+      // Changing the device date, reinstalling, or clearing app storage cannot
+      // move it.
+      //
+      // Expiry is checked at BOTH levels and either one closes the account:
+      //   tenant  restaurants/{rid}.expiresAt   — the demo workspace as a whole
+      //   account users/{uid}.expiresAt         — the individual login
+      // The tenant field is what makes this airtight: without it, anyone who
+      // can create a user doc inside the trial (an admin, or a fresh join-code
+      // signup) could mint a seat with no expiry and keep the workspace alive
+      // past the deadline.
+      function restaurantDoc() {
+        return get(/databases/$(database)/documents/restaurants/$(restaurantId)).data;
+      }
+
+      function tenantNotExpired() {
+        return !('expiresAt' in restaurantDoc())
+          || restaurantDoc().expiresAt > request.time;
+      }
+
+      function selfNotExpired() {
+        return !('expiresAt' in profile())
+          || profile().expiresAt > request.time;
+      }
+
+      function notExpired() {
+        return tenantNotExpired() && selfNotExpired();
+      }
+
+      // No client may add, change, or CLEAR an expiresAt on a doc it can edit.
+      // Clearing is the dangerous one: without the first clause a trial admin
+      // could strip the trial cashier's expiry, or a trial cashier could strip
+      // the waiter's and kitchen's, and keep a seat past the deadline. Only the
+      // seed script (Admin SDK, which bypasses rules entirely) sets this field.
+      // Written as two mutually exclusive shapes — "absent on both sides" or
+      // "present on both sides AND equal" — so the comparison is only reached
+      // when BOTH maps actually carry the key. Reading a missing field is an
+      // evaluation error in rules; it still denies, but a clean false is
+      // easier to trust and keeps the audit logs readable.
+      function expiryUnchanged() {
+        return (!('expiresAt' in resource.data)
+                && !('expiresAt' in request.resource.data))
+          || (('expiresAt' in resource.data)
+              && ('expiresAt' in request.resource.data)
+              && request.resource.data.expiresAt == resource.data.expiresAt);
+      }
+
+      // An admin creating a staff account must pass its OWN expiry down: a
+      // trial admin cannot mint a permanent (no-expiresAt) colleague and hand
+      // itself an unlimited seat. A permanent admin creates permanent accounts,
+      // exactly as before. Only reachable from the isAdmin() create branch, so
+      // profile() is guaranteed to exist when this runs.
+      function creatorExpiryInherited() {
+        return ('expiresAt' in profile())
+          ? request.resource.data.expiresAt == profile().expiresAt
+          : !('expiresAt' in request.resource.data);
+      }
+
+      // A usable account = cashier-approved signup that isn't restricted today
+      // and whose trial (if any) hasn't run out.
       function activeProfile() {
-        return profile().status == 'approved' && profile().active == true;
+        return profile().status == 'approved'
+          && profile().active == true
+          && notExpired();
       }
 
       function hasRole(role) {
@@ -173,11 +246,17 @@ service cloud.firestore {
       // UPDATE stays admin/cashier-only and can never change the joinCode —
       // the restaurantCodes/{code} lookup is immutable, so the pair can't
       // drift apart.
+      // The tenant expiresAt is stamped ONLY by the seed script (Admin SDK).
+      // A self-registering owner can never mint one, and admin/cashier can
+      // never change or clear the one on a trial workspace.
       allow get: if isMember();
       allow list: if false;
-      allow create: if validProfileName() && isOwnerRegistrationBatch();
+      allow create: if validProfileName()
+        && !('expiresAt' in request.resource.data)
+        && isOwnerRegistrationBatch();
       allow update: if hasAnyRole(['admin', 'cashier'])
         && validProfileName()
+        && expiryUnchanged()
         && (!('joinCode' in resource.data)
             || request.resource.data.joinCode == resource.data.joinCode);
       allow delete: if false;
@@ -205,16 +284,21 @@ service cloud.firestore {
         allow read: if signedIn()
           && (request.auth.uid == uid || hasAnyRole(['admin', 'cashier']));
 
-        allow create: if isAdmin()
+        // Self-signup branches may never carry an expiresAt (a client would
+        // only ever set one on itself to something harmless). They don't need
+        // to: a signup into a trial workspace is caught by tenantNotExpired().
+        allow create: if (isAdmin() && creatorExpiryInherited())
           // waiter/kitchen self-signup — always lands pending + inactive, and
           // only with this restaurant's real join code
           || (signedIn() && request.auth.uid == uid
+              && !('expiresAt' in request.resource.data)
               && request.resource.data.role in ['waiter', 'kitchen']
               && request.resource.data.status == 'pending'
               && request.resource.data.active == false
               && request.resource.data.joinCode == get(rootPath()).data.joinCode)
           // one-time cashier claim — must set the claim flag in the same batch
           || (signedIn() && request.auth.uid == uid
+              && !('expiresAt' in request.resource.data)
               && request.resource.data.role == 'cashier'
               && request.resource.data.status == 'approved'
               && request.resource.data.active == true
@@ -225,12 +309,19 @@ service cloud.firestore {
               // pre-existing) — no cashier claims on a phantom restaurant
               && getAfter(rootPath()).data.name is string);
 
-        allow update: if isAdmin()
-          || (hasRole('cashier')
-              && resource.data.role in ['waiter', 'kitchen']
-              && request.resource.data.role in ['waiter', 'kitchen']
-              && request.resource.data.status in ['pending', 'approved', 'denied']
-              && request.resource.data.active is bool);
+        // expiryUnchanged() is factored OUT of the || so it binds to BOTH
+        // branches. The cashier branch never restricted which keys it could
+        // affect, so without this a cashier could rewrite a waiter/kitchen doc
+        // wholesale and simply drop expiresAt; an admin could do it to anyone.
+        allow update: if expiryUnchanged()
+          && (
+            isAdmin()
+            || (hasRole('cashier')
+                && resource.data.role in ['waiter', 'kitchen']
+                && request.resource.data.role in ['waiter', 'kitchen']
+                && request.resource.data.status in ['pending', 'approved', 'denied']
+                && request.resource.data.active is bool)
+          );
 
         allow delete: if isAdmin()
           || (hasRole('cashier') && resource.data.role in ['waiter', 'kitchen']);

@@ -13,6 +13,7 @@ import { Redirect, router } from "expo-router";
 import { useAuth, type SignupRole } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
+import { DEMO_MODE } from "@/lib/firebase";
 import { colors, space, radius } from "@/theme/theme";
 
 type Mode = "create" | "join";
@@ -42,6 +43,9 @@ export default function Signup() {
 
   // Already signed in with a usable account → nothing to sign up for.
   if (profile) return <Redirect href={homePathForRole(profile.role)} />;
+  // Demo build: signup is hidden on the login screen, but the route still
+  // exists (deep link, back-stack) — bounce it so there's no way in.
+  if (DEMO_MODE) return <Redirect href="/login" />;
 
   async function onSubmit() {
     if (mode === "create" && !restaurantName.trim()) {
@@ -146,7 +150,7 @@ export default function Signup() {
                 style={styles.input}
                 value={restaurantName}
                 onChangeText={setRestaurantName}
-                placeholder="e.g. SADA Restaurant"
+                placeholder="e.g. Smart Serve Restaurant"
                 placeholderTextColor={colors.textMuted}
                 maxLength={60}
               />

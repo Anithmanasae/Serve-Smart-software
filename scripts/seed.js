@@ -106,7 +106,7 @@ async function seedRestaurantProfile(db) {
   // Account tab (admin/cashier), so only merge in defaults.
   await rootRef.set(
     {
-      name: "SADA Restaurant",
+      name: "Smart Serve Restaurant",
       addressLine: "Bengaluru, Karnataka",
       gstEnabled: true,
       joinCode,

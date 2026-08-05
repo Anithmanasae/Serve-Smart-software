@@ -27,6 +27,7 @@ import { paths } from "@/lib/firestore/paths";
 import { useCollectionData } from "@/lib/firestore/useRealtime";
 import { startOfDayIST } from "@/lib/date";
 import { colors, fonts, radius, space } from "@/theme/theme";
+import { BrandMark } from "@/components/BrandLogo";
 import type { Kot } from "@/types/models";
 import {
   completedGroups,
@@ -140,7 +141,10 @@ export function KitchenDisplayScreen() {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* App header */}
       <View style={styles.appBar}>
-        <Text style={styles.brand}>SADA POS</Text>
+        <View style={styles.brandRow}>
+          <BrandMark size={22} />
+          <Text style={styles.brand}>Smart Serve</Text>
+        </View>
         <Text style={styles.kitchenTag}>KITCHEN</Text>
       </View>
 
@@ -281,6 +285,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.s4,
     paddingVertical: space.s3,
   },
+  brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
   brand: {
     fontFamily: fonts.extrabold,
     fontSize: 20,

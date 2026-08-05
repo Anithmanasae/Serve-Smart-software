@@ -1,7 +1,8 @@
 /**
  * RevenueChart — an area/line chart of per-day revenue for the selected range,
  * drawn with react-native-svg (no web/DOM SVG). Green line with a soft green
- * gradient fill, matching the SADA theme. Data comes from `revenueSeries`.
+ * gradient fill, matching the Smart Serve theme. Data comes from
+ * `revenueSeries`.
  */
 import { useState } from "react";
 import { LayoutChangeEvent, StyleSheet, Text, View } from "react-native";
@@ -144,7 +145,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   emptyOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     alignItems: "center",
     justifyContent: "center",
   },

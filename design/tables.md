@@ -2,7 +2,7 @@
 
 Route: `/tables` · Roles: admin, waiter, cashier · Tab: **Tables**
 
-_No mockup provided; spec derived from the scope. Match SADA styling._
+_No mockup provided; spec derived from the scope. Match Smart Serve styling._
 
 ## Layout
 

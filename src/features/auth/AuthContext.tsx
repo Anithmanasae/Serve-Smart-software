@@ -18,6 +18,12 @@
  * approves, restricts, or removes a staff member, that phone reacts instantly
  * — no app restart needed. `profile` is only non-null for a usable account
  * (approved + active); every other signed-in state is described by `gate`.
+ *
+ * TRIAL EXPIRY: a demo account carries `expiresAt`. Because expiry is a clock
+ * event rather than a write, no snapshot fires at the deadline — a timer does
+ * the work (see the expiry effect below), flipping `gate` to "expired" and
+ * signing the device out. Accounts with NO `expiresAt` never expire; that's the
+ * default and it is what every real customer has.
  */
 import {
   createContext,
@@ -32,6 +38,7 @@ import {
   signOut as fbSignOut,
   type User,
 } from "firebase/auth";
+import { AppState } from "react-native";
 import { getDoc, onSnapshot } from "firebase/firestore";
 import { auth, RESTAURANT_ID } from "@/lib/firebase";
 import { paths, setActiveRestaurantId } from "@/lib/firestore/paths";
@@ -49,6 +56,14 @@ const NOT_LINKED_MESSAGE =
   "This account isn't linked to any restaurant. Sign up again with your " +
   "restaurant's join code, or contact support.";
 
+const TRIAL_ENDED_MESSAGE =
+  "Your free trial has ended. Thanks for trying Smart Serve — get in touch to " +
+  "activate your restaurant and keep everything you've set up.";
+
+/** setTimeout stores its delay in a signed 32-bit int; anything larger
+ *  overflows and fires IMMEDIATELY. Re-arm in chunks no bigger than this. */
+const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
 /** Dev-build fallback tenant for logins that predate userIndex (migration). */
 function devFallbackRestaurantId(): string | null {
   return typeof __DEV__ !== "undefined" && __DEV__ ? RESTAURANT_ID : null;
@@ -60,9 +75,16 @@ function devFallbackRestaurantId(): string | null {
  *  - denied     cashier rejected the signup
  *  - restricted approved account switched off for now (day off / suspended)
  *  - removed    profile deleted — account permanently revoked
+ *  - expired    time-limited trial account whose deadline has passed
  * null when signed out or fully usable.
  */
-export type GateStatus = "pending" | "denied" | "restricted" | "removed" | null;
+export type GateStatus =
+  | "pending"
+  | "denied"
+  | "restricted"
+  | "removed"
+  | "expired"
+  | null;
 
 interface AuthState {
   firebaseUser: User | null;
@@ -191,13 +213,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // ── trial expiry ────────────────────────────────────────────────────────────
+  // Expiry is a CLOCK event, not a data change. The profile listener above is
+  // an onSnapshot — it fires on WRITES, and nothing writes to the doc at the
+  // deadline, so a live subscription alone would leave a trial device happily
+  // working until some unrelated write happened to land. Hence a timer.
+  //
+  // This is UX only. The real gate is firestore.rules against request.time (the
+  // server clock). If the prospect rolls the device date back, this timer just
+  // won't fire early — every query still fails server-side, so nothing is
+  // extended; they simply see errors instead of the friendly screen.
+  //
+  // No expiresAt = permanent account = never expires. Never written as
+  // "expiresAt must be in the future".
+  const expiresAtMs = rawProfile?.expiresAt?.toMillis() ?? null;
+  const [expired, setExpired] = useState(false);
+
+  useEffect(() => {
+    if (expiresAtMs === null) {
+      setExpired(false);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const check = () => {
+      const remaining = expiresAtMs - Date.now();
+      if (remaining <= 0) {
+        setExpired(true);
+        return;
+      }
+      setExpired(false);
+      timer = setTimeout(check, Math.min(remaining, MAX_TIMEOUT_MS));
+    };
+    check();
+    // Background JS timers are throttled or suspended on both platforms, so a
+    // device that slept through the deadline must re-check when it wakes.
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") return;
+      if (timer) clearTimeout(timer);
+      check();
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      sub.remove();
+    };
+  }, [expiresAtMs]);
+
+  // Deadline reached mid-session: explain, then end the session for real. The
+  // notice survives the sign-out and renders on the login screen.
+  useEffect(() => {
+    if (!expired || !firebaseUser) return;
+    setNotice(TRIAL_ENDED_MESSAGE);
+    fbSignOut(auth).catch(() => {});
+  }, [expired, firebaseUser]);
+
   const usable =
-    rawProfile !== null && rawProfile.status === "approved" && rawProfile.active;
+    rawProfile !== null &&
+    rawProfile.status === "approved" &&
+    rawProfile.active &&
+    !expired;
   const profile = usable ? rawProfile : null;
 
   let gate: GateStatus = null;
   if (firebaseUser && !loading && !profile) {
-    if (rawProfile === null) {
+    if (expired && rawProfile !== null) {
+      // Wins over every other reason: the account is approved and active, it's
+      // the trial that ran out. Shown in the window before sign-out lands, and
+      // as the fallback if sign-out fails (e.g. offline).
+      gate = "expired";
+    } else if (rawProfile === null) {
       gate = docMissing ? "removed" : null;
     } else if (rawProfile.status === "pending") {
       gate = "pending";

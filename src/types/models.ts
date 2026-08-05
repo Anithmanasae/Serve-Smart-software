@@ -1,5 +1,5 @@
 /**
- * SADA POS — canonical data model.
+ * Smart Serve — canonical data model.
  *
  * This is the single source of truth for document shapes across every module.
  * Subagents: import from here, do NOT redefine these types locally.
@@ -48,6 +48,14 @@ export interface RestaurantProfile {
   /** Whether new bills charge GST — written true at registration. The live
    *  billing switch is still the device-local SettingsContext. */
   gstEnabled?: boolean;
+  /**
+   * TRIAL WORKSPACES ONLY. When present, every role check inside this
+   * restaurant fails once the SERVER clock passes it (firestore.rules
+   * `tenantNotExpired`). ABSENT = NEVER EXPIRES — real customers have no such
+   * field and are entirely unaffected. Written only by scripts/seedTrial.js
+   * via the Admin SDK; no client can set, change or clear it.
+   */
+  expiresAt?: Ts;
   updatedAt: Ts;
 }
 
@@ -87,6 +95,15 @@ export interface AppUser {
    *  server-side — a client can't plant a pending profile in a restaurant
    *  whose code it doesn't know. */
   joinCode?: string;
+  /**
+   * TRIAL ACCOUNTS ONLY. Mirrors the workspace expiry onto the individual
+   * login so the app can show a countdown and flip to the "trial ended" screen
+   * without a second listener. ABSENT = NEVER EXPIRES.
+   *
+   * The client reads this for UX only — enforcement is firestore.rules against
+   * request.time (the server clock). Written only by scripts/seedTrial.js.
+   */
+  expiresAt?: Ts;
   createdAt: Ts;
 }
 

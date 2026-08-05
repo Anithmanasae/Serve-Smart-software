@@ -4,7 +4,7 @@ Route: `/order/:tableId?`  · Roles: admin, waiter · Tab: **Menu**
 
 ## Layout (top → bottom)
 
-1. **Header:** "SADA POS" + bell.
+1. **Header:** "Smart Serve" + bell.
 2. **Title block:** `New Order` (large bold) + subtitle "Manage and organize
    your offerings."
 3. **Search bar:** rounded, full-width, magnifier icon, placeholder

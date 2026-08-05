@@ -1,4 +1,4 @@
-# SADA POS — Setup & Preview Guide
+# Smart Serve — Setup & Preview Guide
 
 Get the app connected to your Firebase project, seeded with sample data, and
 running on your phone via **Expo Go**.
@@ -105,6 +105,103 @@ npx expo start --tunnel
 Routes through Expo's tunnel so any network works; scan the QR the same way.
 
 > `.env.local` is read at bundle time, so restart `expo start` after editing it.
+
+---
+
+## 5. Hand a prospect a 2-day sandbox trial
+
+A trial runs in its **own tenant**, cloned from your live restaurant's menu and
+tables. The prospect never touches live data — their orders, bills, bill numbers
+and daily revenue all live under `restaurants/demo-trial/`.
+
+Enforcement is **server-side**, in `firestore.rules`, against `request.time`
+(Google's clock). Changing the device date or reinstalling does not extend it.
+
+> **The safety property:** a trial carries an `expiresAt` field. **No field =
+> never expires.** Every real customer has no such field and is completely
+> unaffected. The check is never written as "expiresAt must be in the future" —
+> that form would lock out every existing account on deploy.
+
+### Before you deploy — prove it on the emulator
+
+Requires a JDK (`java -version`); the Firebase emulators won't start without one.
+
+```bash
+firebase emulators:start --only auth,firestore --project demo-sada-isolation
+# in a second terminal:
+E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/trialExpiry.e2e.ts
+E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/isolation.e2e.ts
+```
+
+The expiry suite's first and last checkpoints are the ones that matter: a
+restaurant with no `expiresAt` works identically before and after.
+
+### Deploy and seed
+
+```bash
+npm run trial:audit                      # BEFORE: live accounts show "no expiry"
+firebase deploy --only firestore:rules   # shared with production — see below
+npm run trial:audit                      # AFTER: identical. Nothing moved.
+npm run trial:seed                       # clone menu + create the 3 logins
+```
+
+`trial:seed` prints the three logins (cashier / waiter / kitchen), a shared
+password, the sandbox join code and the exact deadline. All three are
+pre-approved, so the prospect skips the join-code and approval flow entirely.
+
+| Variable | Default | |
+|---|---|---|
+| `TRIAL_DAYS` | `2` | trial length |
+| `TRIAL_RESTAURANT_ID` | `demo-trial` | must start with `demo-` |
+| `LIVE_RESTAURANT_ID` | `sada-main` | cloned **from**, never written to |
+| `DEMO_PASSWORD` | `Demo@1234` | shared by all three logins |
+
+### Between prospects
+
+```bash
+npm run trial:reset   # wipes orders/KOTs/bills/counters + the 3 logins
+npm run trial:seed    # fresh logins, clock restarts
+```
+
+`trial:reset` **keeps** the cloned menu and tables, and targets accounts by
+membership of the trial tenant — it never enumerates all users.
+
+> `scripts/resetUsers.js` is the old single-tenant script and deletes **every
+> login in the project**. It now refuses to run without an explicit opt-in. Use
+> `trial:reset` for sandboxes.
+
+### The demo APK
+
+The tenant is resolved at runtime, so the prospect can use your normal build.
+Build the `demo` profile only if you want self-signup hidden:
+
+```bash
+eas build --profile demo --platform android
+```
+
+That sets `EXPO_PUBLIC_DEMO_MODE=true`, which hides the "Create an account" link
+and shows a **DEMO BUILD** chip on the login screen — that chip is how you
+verify the flag actually reached the bundle, and how you'd spot it if it ever
+shipped to production by mistake.
+
+> Hiding signup is UX, not enforcement: signup is a legitimately open flow and
+> the rules cannot tell a prospect from a real new customer. What stops a trial
+> running long is `expiresAt` on the **workspace** — so even a fresh join-code
+> signup inside the sandbox is expired too.
+
+### What's shared with production
+
+`firestore.rules` is a **single global ruleset** for the whole database — there
+is no per-tenant ruleset, so deploying it applies to every customer at once.
+Data stays isolated; the policy does not. Rollback:
+
+```bash
+# fastest: Firebase Console → Firestore → Rules → version history → rollback
+git checkout HEAD~1 -- firestore.rules && firebase deploy --only firestore:rules
+```
+
+The app-side changes (`AuthContext`, `pending.tsx`, `login.tsx`, `models.ts`)
+ship in your next build and are inert for any account without `expiresAt`.
 
 ---
 

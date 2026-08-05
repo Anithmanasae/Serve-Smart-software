@@ -6,7 +6,7 @@ Redesigned (Jul 2026): per-table cards with a red/orange/green status system.
 
 ## Layout
 
-1. **Header:** "SADA POS" + "KITCHEN" tag.
+1. **Header:** "Smart Serve" + "KITCHEN" tag.
 2. **Status tabs** (three, equal width, live counts, color-coded):
    - **ORDERS (red)** — tables with an active ticket (`new`/`preparing`/`ready`).
    - **ADDITIONAL (orange)** — tables with a 2nd+ active ticket (a later

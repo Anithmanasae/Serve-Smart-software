@@ -8,12 +8,13 @@ import {
   KeyboardAvoidingView,
   ScrollView,
   Platform,
-  Image,
 } from "react-native";
 import { Redirect, router } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
+import { BrandLogo } from "@/components/BrandLogo";
+import { DEMO_MODE } from "@/lib/firebase";
 import { colors, space, radius } from "@/theme/theme";
 
 export default function Login() {
@@ -54,14 +55,17 @@ export default function Login() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.brand}>
-          <Image
-            source={require("../assets/brand/logo.png")}
-            style={styles.logo}
-            resizeMode="contain"
-            accessibilityRole="image"
-            accessibilityLabel="SADA POS"
-          />
+          <BrandLogo size={88} />
           <Text style={styles.sub}>Sign in to continue</Text>
+          {/* Build-time verification you can see without a debugger: if this
+              chip is present, EXPO_PUBLIC_DEMO_MODE really did reach the
+              bundle. Its ABSENCE on a production build is the check that
+              matters — you'd spot a demo flag shipped by mistake. */}
+          {DEMO_MODE && (
+            <View style={styles.demoChip}>
+              <Text style={styles.demoChipText}>DEMO BUILD · FREE TRIAL</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.form}>
@@ -101,16 +105,21 @@ export default function Login() {
             </Text>
           </Pressable>
 
-          <Pressable
-            style={({ pressed }) => [styles.signupLink, pressed && { opacity: 0.6 }]}
-            onPress={() => router.push("/signup")}
-            disabled={busy}
-          >
-            <Text style={styles.signupText}>
-              New staff member?{" "}
-              <Text style={styles.signupTextBold}>Create an account</Text>
-            </Text>
-          </Pressable>
+          {/* Demo builds ship with pre-made trial logins, so self-signup is
+              hidden — a prospect can't register their own restaurant halfway
+              through the demo. Production builds are unaffected. */}
+          {!DEMO_MODE && (
+            <Pressable
+              style={({ pressed }) => [styles.signupLink, pressed && { opacity: 0.6 }]}
+              onPress={() => router.push("/signup")}
+              disabled={busy}
+            >
+              <Text style={styles.signupText}>
+                New staff member?{" "}
+                <Text style={styles.signupTextBold}>Create an account</Text>
+              </Text>
+            </Pressable>
+          )}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -126,7 +135,6 @@ const styles = StyleSheet.create({
     gap: space.s6,
   },
   brand: { alignItems: "center", gap: space.s3 },
-  logo: { width: 200, height: 200 * (762 / 890) },
   sub: { color: colors.textMuted, fontSize: 15 },
   form: { gap: space.s3 },
   label: { fontSize: 13, color: colors.textMuted, marginTop: space.s2 },
@@ -150,6 +158,21 @@ const styles = StyleSheet.create({
   buttonDisabled: { opacity: 0.6 },
   buttonPressed: { opacity: 0.7, transform: [{ scale: 0.98 }] },
   buttonText: { color: colors.textInverse, fontSize: 16, fontWeight: "700" },
+  demoChip: {
+    marginTop: space.s2,
+    paddingVertical: space.s2,
+    paddingHorizontal: space.s4,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  demoChipText: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
   signupLink: { alignItems: "center", padding: space.s3 },
   signupText: { color: colors.textMuted, fontSize: 14 },
   signupTextBold: { color: colors.primary, fontWeight: "700" },

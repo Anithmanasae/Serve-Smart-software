@@ -166,7 +166,7 @@ async function main() {
   ok("live bill encodes cleanly at 32 and 48 cols");
 
   // Restore the seeded header so the dev app keeps its normal name.
-  await saveRestaurantProfile("SADA Restaurant", "Bengaluru, Karnataka");
+  await saveRestaurantProfile("Smart Serve Restaurant", "Bengaluru, Karnataka");
   ok("restored seeded restaurant profile");
 
   console.log(`\nPRINTING E2E PASS — ${step} checkpoints.`);

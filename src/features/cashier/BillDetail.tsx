@@ -1,5 +1,5 @@
 /**
- * Bill detail — SADA POS Cashier, React Native port.
+ * Bill detail — Smart Serve Cashier, React Native port.
  *
  * Renders a single bill: the itemized order lines (what the customer bought,
  * amount per line, item total below), the money summary (all values from the
@@ -127,7 +127,7 @@ export function BillDetail({
       try {
         const paperWidth = await getPaperWidth();
         const receipt = encodeReceipt({
-          profile: restaurant ?? { name: "SADA POS" },
+          profile: restaurant ?? { name: "Smart Serve" },
           bill,
           order,
           cashierName: cashierProfile?.name ?? "-",
@@ -174,7 +174,7 @@ export function BillDetail({
     tapFeedback();
     const text = encodeURIComponent(
       formatWhatsAppReceipt({
-        profile: restaurant ?? { name: "SADA POS" },
+        profile: restaurant ?? { name: "Smart Serve" },
         bill,
         order,
         paymentLabel: bill.paymentMode

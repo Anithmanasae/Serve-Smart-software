@@ -1,5 +1,5 @@
 /**
- * Tables (Floor View) — SADA POS, React Native port.
+ * Tables (Floor View) — Smart Serve, React Native port.
  *
  * Live floor grid: subscribes to `tables` and to every open/billed order, maps
  * each table to its running order (total + elapsed time), and colour-codes cards

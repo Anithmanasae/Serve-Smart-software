@@ -50,3 +50,6 @@ if (USE_EMULATOR) {
 export const storage = null as unknown as never;
 
 export const RESTAURANT_ID = env.EXPO_PUBLIC_RESTAURANT_ID ?? "sada-main";
+
+/** Demo-build flag — always false under E2E (see src/lib/firebase.ts). */
+export const DEMO_MODE = false;

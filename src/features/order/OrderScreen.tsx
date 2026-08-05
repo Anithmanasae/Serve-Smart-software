@@ -39,6 +39,7 @@ import {
   tapFeedback,
 } from "@/lib/feedback";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
+import { BrandMark } from "@/components/BrandLogo";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
@@ -321,7 +322,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       if (!kot) return;
       const paperWidth = await getPaperWidth();
       const ticket = encodeKot({
-        profile: restaurant ?? { name: "SADA POS" },
+        profile: restaurant ?? { name: "Smart Serve" },
         kot,
         paperWidth,
       });
@@ -384,7 +385,10 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* App header */}
       <View style={styles.appBar}>
-        <Text style={styles.brand}>SADA POS</Text>
+        <View style={styles.brandRow}>
+          <BrandMark size={20} />
+          <Text style={styles.brand}>Smart Serve</Text>
+        </View>
         <Text style={styles.bell}>🔔</Text>
       </View>
 
@@ -629,6 +633,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.s4,
     paddingVertical: space.s3,
   },
+  brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
   brand: {
     fontFamily: fonts.extrabold,
     fontSize: 18,

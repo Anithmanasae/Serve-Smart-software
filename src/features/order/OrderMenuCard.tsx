@@ -1,8 +1,9 @@
 /**
  * A single menu-item card for the Waiter New Order grid.
  *
- * Premium SADA look: a borderless pure-white card with a soft, blurred drop
- * shadow, a rounded image (Feather placeholder when none), and a green price.
+ * Premium Smart Serve look: a borderless pure-white card with a soft, blurred
+ * drop shadow, a rounded image (Feather placeholder when none), and a green
+ * price.
  * When the item is an un-sent line in the current order the circular `+` add
  * button becomes a soft-gray `−  qty  +` stepper. Steppers spring on press.
  */

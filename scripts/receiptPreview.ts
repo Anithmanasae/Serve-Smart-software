@@ -67,7 +67,7 @@ const bill = {
 for (const paperWidth of [58, 80] as const) {
   const cols = lineWidth(paperWidth);
   const { bytes, preview } = encodeReceipt({
-    profile: { name: "Hotel Sada Grand", addressLine: "12 MG Road, Bengaluru" },
+    profile: { name: "Hotel Grand Palace", addressLine: "12 MG Road, Bengaluru" },
     bill,
     order,
     cashierName: "Priya Nair",

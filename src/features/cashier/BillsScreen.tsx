@@ -1,5 +1,5 @@
 /**
- * Bills (Cashier) — SADA POS, React Native port.
+ * Bills (Cashier) — Smart Serve, React Native port.
  *
  * Landing list for the cashier: bills a waiter has requested / finalized bills
  * in progress (`useActiveBills`), plus open orders split by kitchen progress

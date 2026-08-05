@@ -28,9 +28,14 @@ scripts/serviceAccount.json
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
-# service-account key for the seed script — NEVER commit
+# service-account key for the seed/trial scripts — NEVER commit.
+# These keys bypass security rules entirely: anyone holding one has full
+# read/write on every tenant. The console downloads them under their own
+# generated name, so match that shape too, wherever it lands.
 scripts/serviceAccount.json
 serviceAccount.json
+*firebase-adminsdk*.json
+*-adminsdk-*.json
 
 # editor / os
 .vscode/*

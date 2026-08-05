@@ -53,7 +53,7 @@ const sampleKot: Pick<Kot, "ticketNumber" | "tableLabel" | "orderType" | "items"
 
 for (const paperWidth of [58, 80] as PaperWidth[]) {
   const { preview, bytes } = encodeKot({
-    profile: { name: "Hotel Sada Deluxe" },
+    profile: { name: "Hotel Grand Deluxe" },
     kot: sampleKot,
     paperWidth,
   });

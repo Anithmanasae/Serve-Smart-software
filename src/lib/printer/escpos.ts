@@ -363,7 +363,7 @@ export function encodeTestTicket(paperWidth: PaperWidth): EncodedReceipt {
   w.raw(INIT);
   w.align("center");
   w.raw(BOLD_ON);
-  w.line("SADA POS");
+  w.line("Smart Serve");
   w.raw(BOLD_OFF);
   w.line("Printer test OK");
   w.line(`${paperWidth}mm / ${cols} cols`);

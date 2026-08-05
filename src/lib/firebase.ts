@@ -44,3 +44,18 @@ export const storage = getStorage(app);
  */
 export const RESTAURANT_ID =
   process.env.EXPO_PUBLIC_RESTAURANT_ID ?? "sada-main";
+
+/**
+ * DEMO BUILD flag — set only in the `demo` EAS profile (see eas.json).
+ *
+ * Hides self-signup so a prospect on a trial device can't wander off and
+ * register their own restaurant mid-demo. Your PRODUCTION build leaves this
+ * false, so real customers keep self-onboarding exactly as before.
+ *
+ * This is UX, NOT enforcement — signup is a legitimately open flow and rules
+ * cannot tell a prospect from a genuine new customer. What actually stops a
+ * trial running long is the server-side `expiresAt` check in firestore.rules,
+ * which is stamped on the trial WORKSPACE as well as each account: a fresh
+ * join-code signup inside the demo tenant is expired too.
+ */
+export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO_MODE === "true";

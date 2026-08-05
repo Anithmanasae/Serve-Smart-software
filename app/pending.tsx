@@ -40,6 +40,11 @@ export default function Pending() {
       title: "Account removed",
       body: "This account no longer exists. Contact the cashier if you believe this is an error.",
     },
+    expired: {
+      icon: "⌛",
+      title: "Your free trial has ended",
+      body: "Thanks for trying Smart Serve. Your demo access has finished — everything you set up is still saved. Get in touch to activate your restaurant and pick up where you left off.",
+    },
   }[gate];
 
   return (

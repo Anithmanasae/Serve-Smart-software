@@ -1,4 +1,4 @@
-# SADA POS — Design Specs
+# Smart Serve — Design Specs
 
 These specs are the source of truth for each screen's layout, derived from the
 approved mockups. Subagents build to these (the original images are not in the
@@ -6,7 +6,7 @@ repo). All specs share the theme in `src/styles/theme.css`.
 
 ## Global shell
 
-- **Header:** left = logo dot + "SADA POS" wordmark (green). Right = bell icon
+- **Header:** left = logo dot + "Smart Serve" wordmark (green). Right = bell icon
   (notifications) or, on cashier screens, the signed-in user's name + role +
   avatar (e.g. "Alex Mercer / Head Admin").
 - **Bottom tab bar:** fixed, white, top border. Icon + label per tab. Active

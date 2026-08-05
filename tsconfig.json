@@ -2,6 +2,10 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "ignoreDeprecations": "6.0",
+    // Expo's base sets customConditions: ["react-native"], which stops @types/node
+    // from resolving via exports. The Node-only shims under scripts/ need it.
+    "types": ["node"],
     "baseUrl": ".",
     "paths": {
       "@/*": [

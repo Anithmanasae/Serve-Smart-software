@@ -1,4 +1,4 @@
-# SADA POS
+# Smart Serve
 
 Restaurant billing software — **React Native (Expo)** + Firebase (Firestore
 real-time). Runs in **Expo Go** for instant on-device preview. Built for a

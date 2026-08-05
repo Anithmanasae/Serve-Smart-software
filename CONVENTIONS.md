@@ -1,4 +1,4 @@
-# SADA POS — Engineering Conventions (React Native + Expo)
+# Smart Serve — Engineering Conventions (React Native + Expo)
 
 **Read this before touching any code.** The app is **React Native via Expo**
 (managed workflow, runs in **Expo Go**), routed with **expo-router**. It was
@@ -78,8 +78,8 @@ build and export your screen from `src/features/<x>/index.ts`.
 
 `design/*.md` describe each screen's **layout, behavior, and data** (written for
 the web build). Honor the layout/behavior/data; **translate the DOM/CSS details
-into RN primitives + theme tokens**. Keep the SADA look: white cards on the gray
-canvas, green primary, rounded corners, mobile-first.
+into RN primitives + theme tokens**. Keep the Smart Serve look: white cards on
+the gray canvas, green primary, rounded corners, mobile-first.
 
 ## Definition of done for a screen
 
