@@ -13,6 +13,7 @@
     "trial:seed": "node scripts/seedTrial.js",
     "trial:reset": "node scripts/resetTrial.js",
     "trial:audit": "node scripts/auditTenants.js",
+    "verify:env": "node scripts/verifyBuildEnv.js",
     "compress-images": "node scripts/compressMenuImages.js",
     "brand": "node scripts/generateBrandAssets.js"
   },

@@ -14,7 +14,7 @@ import { useAuth } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { BrandLogo } from "@/components/BrandLogo";
-import { DEMO_MODE } from "@/lib/firebase";
+import { DEMO_MODE, FIREBASE_PROJECT_ID } from "@/lib/firebase";
 import { colors, space, radius } from "@/theme/theme";
 
 export default function Login() {
@@ -57,13 +57,15 @@ export default function Login() {
         <View style={styles.brand}>
           <BrandLogo size={88} />
           <Text style={styles.sub}>Sign in to continue</Text>
-          {/* Build-time verification you can see without a debugger: if this
-              chip is present, EXPO_PUBLIC_DEMO_MODE really did reach the
-              bundle. Its ABSENCE on a production build is the check that
-              matters — you'd spot a demo flag shipped by mistake. */}
+          {/* Verification you can see without a debugger. The chip proves
+              EXPO_PUBLIC_DEMO_MODE reached the bundle; the project id proves
+              WHICH Firebase backend this APK talks to. A build can silently
+              pick up EAS's stored env vars instead of .env.local, and the only
+              other symptom is a valid login being rejected. */}
           {DEMO_MODE && (
             <View style={styles.demoChip}>
               <Text style={styles.demoChipText}>DEMO BUILD · FREE TRIAL</Text>
+              <Text style={styles.demoChipProject}>{FIREBASE_PROJECT_ID}</Text>
             </View>
           )}
         </View>
@@ -172,6 +174,14 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: "800",
     letterSpacing: 0.6,
+    textAlign: "center",
+  },
+  demoChipProject: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 2,
   },
   signupLink: { alignItems: "center", padding: space.s3 },
   signupText: { color: colors.textMuted, fontSize: 14 },

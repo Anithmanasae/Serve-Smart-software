@@ -59,3 +59,16 @@ export const RESTAURANT_ID =
  * join-code signup inside the demo tenant is expired too.
  */
 export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO_MODE === "true";
+
+/**
+ * Which Firebase project this BUILD actually talks to.
+ *
+ * `.env.local` is gitignored, so it never reaches an EAS build — a build takes
+ * its config from EAS's stored environment variables instead. The two can
+ * silently disagree, and when they do the only symptom is "invalid email or
+ * password" on a login that is perfectly valid in the project you were looking
+ * at. Surfacing the id in the UI turns that into something you can see.
+ *
+ * "UNSET" means no Firebase config reached the bundle at all.
+ */
+export const FIREBASE_PROJECT_ID = firebaseConfig.projectId ?? "UNSET";
