@@ -10,8 +10,10 @@
  * WHAT IS CLONED (read from live, written to trial):
  *   root profile   name (+ " (Demo)"), addressLine, gstEnabled
  *   menuCategories  every doc, verbatim
- *   menuItems       every doc, verbatim (imageUrl still points at the live
- *                   Storage object — read-only, renders fine cross-tenant)
+ *   menuItems       every doc, verbatim. Images are stored as base64 data URIs
+ *                   ON the menu item doc (not Firebase Storage), so the clone
+ *                   is fully self-contained — the sandbox has no runtime
+ *                   dependency on the live tenant or its Storage objects.
  *   tables          every doc, reset to available / unmerged / no open order
  *
  * WHAT IS NOT CLONED:
