@@ -10,6 +10,16 @@
  *
  * A paid bill is read-only: totals + "Paid via …" are shown, the settle
  * controls are locked, but a reprint is still allowed.
+ *
+ * NON-CHARGEABLE is offered here as an alternative to a payment method, not as
+ * one of them: picking it collects a reason, prints/settles at ₹0 payable, and
+ * keeps the bill out of sales entirely. The bill's real total stays on screen
+ * throughout — the cashier should always see what is being given away.
+ *
+ * CANCELLING a settled bill (the bad-food refund) lives here too, but only on
+ * a bill paid TODAY and only for cashier/admin — past days are closed. It sits
+ * below the paid banner rather than among the actions, takes a reason, and asks
+ * once more before `voidBill` backs the sale out of the day's figures.
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -25,9 +35,18 @@ import {
   View,
 } from "react-native";
 import { formatMoney } from "@/lib/money";
-import { tapFeedback } from "@/lib/feedback";
+import { dayKey, formatTimeIST } from "@/lib/date";
+import { successFeedback, tapFeedback } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
-import type { PaymentMode } from "@/types/models";
+import {
+  NC_REASONS,
+  NC_REASON_LABELS,
+  VOID_REASONS,
+  VOID_REASON_LABELS,
+  type NcReason,
+  type PaymentMode,
+  type VoidReason,
+} from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
 import { encodeReceipt, formatBillNumber } from "@/lib/printer/escpos";
@@ -41,7 +60,7 @@ import {
   formatWhatsAppReceipt,
   normalizeIndianMobile,
 } from "@/lib/receiptText";
-import { reprintBill, settleBill } from "./cashierApi";
+import { reprintBill, settleBill, voidBill } from "./cashierApi";
 import { useBill, useOrder } from "./useCashierData";
 
 const PAYMENT_TILES: { mode: PaymentMode; label: string; icon: string }[] = [
@@ -64,14 +83,30 @@ export function BillDetail({
   const { data: bill, loading: billLoading } = useBill(billId);
   const { data: order } = useOrder(bill?.orderId ?? null);
   const { data: restaurant } = useRestaurantProfile();
-  const { profile: cashierProfile } = useAuth();
+  const { profile: cashierProfile, role } = useAuth();
 
   const isPaid = bill?.status === "paid";
+  const isVoid = bill?.status === "void";
+  /** Settled one way or the other — the bill is read-only from here. */
+  const isSettled = isPaid || isVoid;
 
   // Local UI selections (bill.paymentMode is null until settled).
   const [selectedMode, setSelectedMode] = useState<PaymentMode | null>(null);
-  const [busy, setBusy] = useState<null | "settle" | "print">(null);
+  const [busy, setBusy] = useState<null | "settle" | "print" | "void">(null);
   const [justPrinted, setJustPrinted] = useState(false);
+
+  // Cancel (void) a settled bill: the reason sheet's draft state.
+  const [voidOpen, setVoidOpen] = useState(false);
+  const [voidDraftReason, setVoidDraftReason] = useState<VoidReason | null>(null);
+  const [voidDraftNote, setVoidDraftNote] = useState("");
+
+  // Non-chargeable: `ncSel` is the confirmed choice, the rest is the sheet.
+  const [ncSel, setNcSel] = useState<{ reason: NcReason; note: string } | null>(
+    null
+  );
+  const [ncOpen, setNcOpen] = useState(false);
+  const [ncDraftReason, setNcDraftReason] = useState<NcReason | null>(null);
+  const [ncDraftNote, setNcDraftNote] = useState("");
 
   // WhatsApp send: number-entry dialog state.
   const [waOpen, setWaOpen] = useState(false);
@@ -82,9 +117,37 @@ export function BillDetail({
     if (bill?.paymentMode) setSelectedMode(bill.paymentMode);
   }, [bill?.paymentMode]);
 
+  /** Comped — either already settled that way, or picked and not yet settled. */
+  const isNc = bill?.nonChargeable === true || ncSel !== null;
+  const ncReason = bill?.ncReason ?? ncSel?.reason ?? null;
+  const ncReasonLabel = ncReason ? NC_REASON_LABELS[ncReason] : null;
+
+  const voidReasonLabel = bill?.voidReason
+    ? VOID_REASON_LABELS[bill.voidReason]
+    : null;
+
+  /**
+   * Cancelling is offered only for a bill settled TODAY, and only to the people
+   * who can settle. The rules enforce both independently — this just keeps the
+   * button off screen when it would only fail.
+   */
+  const canVoid = useMemo(
+    () =>
+      isPaid &&
+      (role === "cashier" || role === "admin") &&
+      !!bill?.paidAt &&
+      dayKey(bill.paidAt.toDate()) === dayKey(),
+    [isPaid, role, bill?.paidAt]
+  );
+
   const canSettle = useMemo(
-    () => !!bill && !!order && !isPaid && !!selectedMode && busy === null,
-    [bill, order, isPaid, selectedMode, busy]
+    () =>
+      !!bill &&
+      !!order &&
+      !isPaid &&
+      (!!selectedMode || ncSel !== null) &&
+      busy === null,
+    [bill, order, isPaid, selectedMode, ncSel, busy]
   );
 
   async function run(kind: NonNullable<typeof busy>, fn: () => Promise<unknown>) {
@@ -100,12 +163,85 @@ export function BillDetail({
   }
 
   function onSettle() {
-    if (!bill || !order || !selectedMode) return;
+    if (!bill || !order) return;
+    // NC wins when both are somehow set — it is the deliberate, explicit act.
+    const settlement = ncSel
+      ? ({ kind: "nc", reason: ncSel.reason, note: ncSel.note } as const)
+      : selectedMode
+        ? ({ kind: "paid", mode: selectedMode } as const)
+        : null;
+    if (!settlement) return;
     tapFeedback();
     void run("settle", async () => {
-      await settleBill(bill, order, selectedMode);
+      await settleBill(bill, order, settlement);
       onClose();
     });
+  }
+
+  /** Open the reason sheet, seeded with whatever was picked before. */
+  function onPickNc() {
+    if (isPaid || busy) return;
+    tapFeedback();
+    setNcDraftReason(ncSel?.reason ?? null);
+    setNcDraftNote(ncSel?.note ?? "");
+    setNcOpen(true);
+  }
+
+  /** Confirm the comp. A reason is mandatory — it is the only trace of WHY a
+   *  meal left the building for free, so the button stays dead without one. */
+  function onConfirmNc() {
+    if (!ncDraftReason) return;
+    tapFeedback();
+    setNcSel({ reason: ncDraftReason, note: ncDraftNote.trim().slice(0, 140) });
+    setSelectedMode(null); // a comp is not a payment method
+    setNcOpen(false);
+  }
+
+  /** Back out of a comp that hasn't been settled yet. */
+  function onClearNc() {
+    tapFeedback();
+    setNcSel(null);
+    setNcOpen(false);
+  }
+
+  /** Open the cancel-reason sheet on a settled bill. */
+  function onPickVoid() {
+    if (!canVoid || busy) return;
+    tapFeedback();
+    setVoidDraftReason(null);
+    setVoidDraftNote("");
+    setVoidOpen(true);
+  }
+
+  /**
+   * Confirm the cancellation. A reason is mandatory — it is the only record of
+   * WHY money went back — and the Alert is the last stop before the sale comes
+   * out of the day's figures, which cannot be undone from the app.
+   */
+  function onConfirmVoid() {
+    if (!bill || !voidDraftReason || !cashierProfile) return;
+    const reason = voidDraftReason;
+    const note = voidDraftNote.trim().slice(0, 140);
+    tapFeedback();
+    setVoidOpen(false);
+    Alert.alert(
+      "Cancel this bill?",
+      `${formatMoney(bill.grandTotal)} will be removed from today's sales and refunded to the customer. This can't be undone.`,
+      [
+        { text: "Keep bill", style: "cancel" },
+        {
+          text: "Cancel bill",
+          style: "destructive",
+          onPress: () => {
+            void run("void", async () => {
+              await voidBill(bill, cashierProfile.uid, reason, note);
+              successFeedback();
+              onClose();
+            });
+          },
+        },
+      ]
+    );
   }
 
   /**
@@ -138,6 +274,8 @@ export function BillDetail({
             : selectedMode
               ? paymentLabel(selectedMode)
               : null,
+          nonChargeable: isNc,
+          ncReasonLabel,
         });
         await printToSavedPrinter(receipt.bytes);
         await reprintBill(bill.id, bill.printedCount);
@@ -182,6 +320,8 @@ export function BillDetail({
           : selectedMode
             ? paymentLabel(selectedMode)
             : null,
+        nonChargeable: isNc,
+        ncReasonLabel,
       })
     );
     setWaOpen(false);
@@ -222,7 +362,13 @@ export function BillDetail({
             {bill.billNumber !== undefined
               ? `Bill No ${formatBillNumber(bill.billNumber)} · `
               : ""}
-            {isPaid ? `Paid via ${paymentLabel(bill.paymentMode!)}` : "Open bill"}
+            {isVoid
+              ? "Cancelled"
+              : !isPaid
+                ? "Open bill"
+                : bill.nonChargeable
+                  ? "Non-Chargeable"
+                  : `Paid via ${paymentLabel(bill.paymentMode!)}`}
           </Text>
         </View>
         <Pressable
@@ -274,8 +420,32 @@ export function BillDetail({
 
           <View style={styles.totalRow}>
             <Text style={styles.totalLabel}>Grand Total</Text>
-            <Text style={styles.totalValue}>{formatMoney(bill.grandTotal)}</Text>
+            <Text
+              style={[
+                styles.totalValue,
+                (isNc || isVoid) && styles.totalValueStruck,
+              ]}
+            >
+              {formatMoney(bill.grandTotal)}
+            </Text>
           </View>
+
+          {/* The comped bill keeps its real total above — the cashier should
+              always see the size of what's being given away — with the ₹0
+              payable stated separately underneath. */}
+          {isNc && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.totalRow}>
+                <Text style={styles.totalLabel}>Amount Payable</Text>
+                <Text style={styles.ncPayableValue}>{formatMoney(0)}</Text>
+              </View>
+              <Text style={styles.ncFootnote}>
+                Non-chargeable{ncReasonLabel ? ` · ${ncReasonLabel}` : ""} — not
+                counted in sales.
+              </Text>
+            </>
+          )}
         </View>
 
         {/* ── Payment Method ──────────────────────────────────────────────── */}
@@ -292,8 +462,12 @@ export function BillDetail({
                     active && styles.tileActive,
                     pressed && styles.pressed,
                   ]}
-                  onPress={() => !isPaid && setSelectedMode(t.mode)}
-                  disabled={isPaid}
+                  onPress={() => {
+                    if (isSettled) return;
+                    setSelectedMode(t.mode);
+                    setNcSel(null); // picking a payment undoes a pending comp
+                  }}
+                  disabled={isSettled}
                 >
                   <Text style={styles.tileIcon}>{t.icon}</Text>
                   <Text
@@ -305,9 +479,45 @@ export function BillDetail({
               );
             })}
           </View>
+
+          {/* Non-chargeable sits apart from the three tiles on purpose: it is
+              not a way of paying, it is the decision not to charge. */}
+          {!isSettled && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.ncBtn,
+                ncSel !== null && styles.ncBtnActive,
+                pressed && styles.pressed,
+              ]}
+              onPress={onPickNc}
+              disabled={busy !== null}
+            >
+              <Text style={styles.tileIcon}>🎁</Text>
+              <View style={styles.ncBtnText}>
+                <Text
+                  style={[
+                    styles.ncBtnLabel,
+                    ncSel !== null && styles.ncBtnLabelActive,
+                  ]}
+                >
+                  Non-Chargeable (NC)
+                </Text>
+                <Text style={styles.ncBtnMeta} numberOfLines={1}>
+                  {ncSel
+                    ? `${NC_REASON_LABELS[ncSel.reason]}${
+                        ncSel.note ? ` · ${ncSel.note}` : ""
+                      } — tap to change`
+                    : "No payment collected · excluded from sales"}
+                </Text>
+              </View>
+            </Pressable>
+          )}
         </View>
 
         {/* ── Send Receipt ────────────────────────────────────────────────── */}
+        {/* Withheld on a cancelled bill: handing the customer a receipt for a
+            sale that has been refunded is the one thing worse than no receipt. */}
+        {!isVoid && (
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Send Receipt</Text>
           <View style={styles.tileRow}>
@@ -341,18 +551,67 @@ export function BillDetail({
             </Pressable>
           </View>
         </View>
+        )}
 
-        {/* ── Settle / Paid state ─────────────────────────────────────────── */}
-        {isPaid ? (
-          <View style={styles.paidBanner}>
-            <Text style={styles.paidBannerText}>
-              Paid via {paymentLabel(bill.paymentMode!)}
+        {/* ── Settle / Paid / Cancelled state ─────────────────────────────── */}
+        {isVoid ? (
+          <View style={styles.voidBanner}>
+            <Text style={styles.voidBannerText}>
+              Bill Cancelled{voidReasonLabel ? ` · ${voidReasonLabel}` : ""}
             </Text>
+            <Text style={styles.voidBannerMeta}>
+              {formatMoney(bill.grandTotal)} refunded
+              {bill.voidedAt ? ` · ${formatTimeIST(bill.voidedAt.toDate())}` : ""}
+            </Text>
+            {!!bill.voidNote && (
+              <Text style={styles.voidBannerMeta}>{bill.voidNote}</Text>
+            )}
           </View>
+        ) : isPaid ? (
+          <>
+            <View style={[styles.paidBanner, isNc && styles.ncBanner]}>
+              <Text style={[styles.paidBannerText, isNc && styles.ncBannerText]}>
+                {isNc
+                  ? `Non-Chargeable${ncReasonLabel ? ` · ${ncReasonLabel}` : ""}`
+                  : `Paid via ${paymentLabel(bill.paymentMode!)}`}
+              </Text>
+              {isNc && (
+                <Text style={styles.ncBannerMeta}>
+                  {formatMoney(bill.grandTotal)} comped
+                  {bill.ncNote ? ` · ${bill.ncNote}` : ""}
+                </Text>
+              )}
+            </View>
+
+            {/* The one way back out of a settled bill — deliberately plain and
+                unpressable-looking, and gone entirely the next business day. */}
+            {canVoid && (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.voidBtn,
+                  pressed && styles.pressed,
+                ]}
+                onPress={onPickVoid}
+                disabled={busy !== null}
+              >
+                {busy === "void" ? (
+                  <ActivityIndicator color={colors.danger} />
+                ) : (
+                  <>
+                    <Text style={styles.voidBtnText}>Cancel this bill</Text>
+                    <Text style={styles.voidBtnMeta}>
+                      Refund the customer and remove this sale from today
+                    </Text>
+                  </>
+                )}
+              </Pressable>
+            )}
+          </>
         ) : (
           <Pressable
             style={({ pressed }) => [
               styles.settleBtn,
+              ncSel !== null && styles.settleBtnNc,
               !canSettle && styles.settleBtnDisabled,
               pressed && styles.pressedScale,
             ]}
@@ -363,9 +622,11 @@ export function BillDetail({
               <ActivityIndicator color={colors.textInverse} />
             ) : (
               <Text style={styles.settleBtnText}>
-                {selectedMode
-                  ? `Settle ${formatMoney(bill.grandTotal)}`
-                  : "Select a payment method"}
+                {ncSel
+                  ? `Mark Non-Chargeable · ${formatMoney(0)}`
+                  : selectedMode
+                    ? `Settle ${formatMoney(bill.grandTotal)}`
+                    : "Select a payment method"}
               </Text>
             )}
           </Pressable>
@@ -416,6 +677,165 @@ export function BillDetail({
                 onPress={onSendWhatsApp}
               >
                 <Text style={styles.waBtnPrimaryText}>Open WhatsApp</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Non-chargeable reason sheet ────────────────────────────────────── */}
+      <Modal
+        visible={ncOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setNcOpen(false)}
+      >
+        <View style={styles.waOverlay}>
+          <View style={styles.waSheet}>
+            <Text style={styles.waTitle}>Mark as Non-Chargeable</Text>
+            <Text style={styles.waHint}>
+              {formatMoney(bill.grandTotal)} will not be collected and will not
+              appear in your sales. Pick a reason so it can be accounted for.
+            </Text>
+
+            <View style={styles.ncChips}>
+              {NC_REASONS.map((r) => {
+                const active = ncDraftReason === r;
+                return (
+                  <Pressable
+                    key={r}
+                    style={({ pressed }) => [
+                      styles.ncChip,
+                      active && styles.ncChipActive,
+                      pressed && styles.pressed,
+                    ]}
+                    onPress={() => setNcDraftReason(r)}
+                  >
+                    <Text
+                      style={[
+                        styles.ncChipText,
+                        active && styles.ncChipTextActive,
+                      ]}
+                    >
+                      {NC_REASON_LABELS[r]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <TextInput
+              style={styles.waInput}
+              value={ncDraftNote}
+              onChangeText={setNcDraftNote}
+              placeholder="Note (optional) — e.g. guest of owner"
+              placeholderTextColor={colors.textMuted}
+              maxLength={140}
+            />
+
+            <View style={styles.waActions}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.waBtn,
+                  styles.waBtnGhost,
+                  pressed && styles.pressed,
+                ]}
+                onPress={ncSel ? onClearNc : () => setNcOpen(false)}
+              >
+                <Text style={styles.waBtnGhostText}>
+                  {ncSel ? "Remove NC" : "Cancel"}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.waBtn,
+                  styles.waBtnPrimary,
+                  !ncDraftReason && styles.waBtnDisabled,
+                  pressed && styles.pressedScale,
+                ]}
+                onPress={onConfirmNc}
+                disabled={!ncDraftReason}
+              >
+                <Text style={styles.waBtnPrimaryText}>Confirm</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Cancel-bill reason sheet ───────────────────────────────────────── */}
+      <Modal
+        visible={voidOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setVoidOpen(false)}
+      >
+        <View style={styles.waOverlay}>
+          <View style={styles.waSheet}>
+            <Text style={styles.waTitle}>Cancel this bill</Text>
+            <Text style={styles.waHint}>
+              {formatMoney(bill.grandTotal)} will be refunded to the customer and
+              taken back out of today's sales. Pick a reason so it can be
+              accounted for.
+            </Text>
+
+            <View style={styles.ncChips}>
+              {VOID_REASONS.map((r) => {
+                const active = voidDraftReason === r;
+                return (
+                  <Pressable
+                    key={r}
+                    style={({ pressed }) => [
+                      styles.ncChip,
+                      active && styles.voidChipActive,
+                      pressed && styles.pressed,
+                    ]}
+                    onPress={() => setVoidDraftReason(r)}
+                  >
+                    <Text
+                      style={[
+                        styles.ncChipText,
+                        active && styles.voidChipTextActive,
+                      ]}
+                    >
+                      {VOID_REASON_LABELS[r]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+
+            <TextInput
+              style={styles.waInput}
+              value={voidDraftNote}
+              onChangeText={setVoidDraftNote}
+              placeholder="Note (optional) — e.g. curry was cold, table 4"
+              placeholderTextColor={colors.textMuted}
+              maxLength={140}
+            />
+
+            <View style={styles.waActions}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.waBtn,
+                  styles.waBtnGhost,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => setVoidOpen(false)}
+              >
+                <Text style={styles.waBtnGhostText}>Keep bill</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.waBtn,
+                  styles.waBtnDanger,
+                  !voidDraftReason && styles.waBtnDisabled,
+                  pressed && styles.pressedScale,
+                ]}
+                onPress={onConfirmVoid}
+                disabled={!voidDraftReason}
+              >
+                <Text style={styles.waBtnPrimaryText}>Cancel bill</Text>
               </Pressable>
             </View>
           </View>
@@ -510,6 +930,18 @@ const styles = StyleSheet.create({
   },
   totalLabel: { fontSize: 17, fontWeight: "700", color: colors.text },
   totalValue: { fontSize: 20, fontWeight: "800", color: colors.primary },
+  // Comped: the real total stays visible but reads as "not being collected".
+  totalValueStruck: {
+    color: colors.textMuted,
+    textDecorationLine: "line-through",
+  },
+  ncPayableValue: { fontSize: 20, fontWeight: "800", color: colors.ncAmber },
+  ncFootnote: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: space.s2,
+    lineHeight: 17,
+  },
 
   tileRow: { flexDirection: "row", gap: space.s3 },
   tile: {
@@ -533,6 +965,30 @@ const styles = StyleSheet.create({
   tileLabelActive: { color: colors.primaryDark },
   tileMeta: { fontSize: 11, color: colors.textMuted },
 
+  // The NC control: full width and visually apart from the payment tiles.
+  ncBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s3,
+    marginTop: space.s3,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderStyle: "dashed",
+    borderColor: colors.ncAmberBorder,
+    backgroundColor: colors.surface,
+    paddingVertical: space.s3,
+    paddingHorizontal: space.s3,
+  },
+  ncBtnActive: {
+    borderStyle: "solid",
+    borderColor: colors.ncAmber,
+    backgroundColor: colors.ncAmberSoft,
+  },
+  ncBtnText: { flex: 1 },
+  ncBtnLabel: { fontSize: 14, fontWeight: "700", color: colors.text },
+  ncBtnLabelActive: { color: colors.ncAmber },
+  ncBtnMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+
   settleBtn: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,
@@ -540,6 +996,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     ...shadow.card,
   },
+  settleBtnNc: { backgroundColor: colors.ncAmber },
   settleBtnDisabled: { backgroundColor: colors.borderStrong },
   settleBtnText: { fontSize: 17, fontWeight: "700", color: colors.textInverse },
 
@@ -552,6 +1009,58 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   paidBannerText: { fontSize: 16, fontWeight: "700", color: colors.primaryDark },
+  ncBanner: {
+    backgroundColor: colors.ncAmberSoft,
+    borderColor: colors.ncAmber,
+  },
+  ncBannerText: { color: colors.ncAmber },
+  ncBannerMeta: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+
+  ncChips: { flexDirection: "row", flexWrap: "wrap", gap: space.s2 },
+  ncChip: {
+    paddingHorizontal: space.s3,
+    paddingVertical: space.s2,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  ncChipActive: {
+    borderColor: colors.ncAmber,
+    backgroundColor: colors.ncAmberSoft,
+  },
+  ncChipText: { fontSize: 13, fontWeight: "600", color: colors.text },
+  ncChipTextActive: { color: colors.ncAmber },
+
+  // Cancelled: red rather than amber. A comp is a choice the restaurant made
+  // up front; a cancellation is money going back out after the fact.
+  voidBtn: {
+    marginTop: space.s3,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    backgroundColor: colors.surface,
+    paddingVertical: space.s3,
+    alignItems: "center",
+  },
+  voidBtnText: { fontSize: 15, fontWeight: "700", color: colors.danger },
+  voidBtnMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  voidBanner: {
+    backgroundColor: colors.statusRedSoft,
+    borderRadius: radius.md,
+    paddingVertical: space.s4,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
+  voidBannerText: { fontSize: 16, fontWeight: "700", color: colors.danger },
+  voidBannerMeta: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  voidChipActive: {
+    borderColor: colors.danger,
+    backgroundColor: colors.statusRedSoft,
+  },
+  voidChipTextActive: { color: colors.danger },
+  waBtnDanger: { backgroundColor: colors.danger },
 
   waOverlay: {
     flex: 1,
@@ -588,6 +1097,7 @@ const styles = StyleSheet.create({
   waBtnGhost: { backgroundColor: colors.surfaceMuted },
   waBtnGhostText: { fontSize: 15, fontWeight: "600", color: colors.text },
   waBtnPrimary: { backgroundColor: colors.primary },
+  waBtnDisabled: { backgroundColor: colors.borderStrong },
   waBtnPrimaryText: {
     fontSize: 15,
     fontWeight: "700",

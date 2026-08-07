@@ -43,6 +43,13 @@ export const colors = {
   statusGreenSoft: "#e4f5ec",
   statusBlue: "#1565C0", // takeaway/counter orders
   statusBlueSoft: "#e7f0fb",
+
+  // Non-chargeable (comped) bills. Amber deliberately reads as neither the
+  // navy money path nor the red of a void — an NC bill is neither a sale nor
+  // a mistake, and should not be mistaken for either at a glance.
+  ncAmber: "#B45309",
+  ncAmberSoft: "#fdf3e3",
+  ncAmberBorder: "#e8c88a",
 } as const;
 
 /** 4px spacing scale. */

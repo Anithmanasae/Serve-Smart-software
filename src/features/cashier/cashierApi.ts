@@ -22,8 +22,10 @@ import { dayKey } from "@/lib/date";
 import type {
   Bill,
   DailySummary,
+  NcReason,
   Order,
   PaymentMode,
+  VoidReason,
 } from "@/types/models";
 
 /** Non-voided order lines as bill inputs. */
@@ -142,15 +144,46 @@ export async function generateBill(
 }
 
 /**
- * Settle a bill: mark paid, close the order, free the table, and roll the sale
- * into today's summary — atomically. After this the bill is immutable (rules).
+ * How a bill was closed out: money was collected, or the meal was comped.
+ *
+ * NON-CHARGEABLE is a settlement, not a payment mode — it deliberately does
+ * NOT live inside `PaymentMode`, because everything that consumes a payment
+ * mode (the payment split, the receipt's "Payment :" line, the day's takings)
+ * is asking about money that changed hands, and for a comp none did.
+ */
+export type Settlement =
+  | { kind: "paid"; mode: PaymentMode }
+  | { kind: "nc"; reason: NcReason; note?: string };
+
+/** Empty-day bases, spread under the previous summary so a doc written before
+ *  a bucket existed still lands on a complete record. */
+const EMPTY_MODES = { cash: 0, upi: 0, card: 0 };
+const EMPTY_SOURCES = { "dine-in": 0, takeaway: 0, delivery: 0 };
+const EMPTY_NC_REASONS = { owner: 0, staff: 0, complaint: 0, pr: 0, other: 0 };
+
+/**
+ * Settle a bill: mark it paid, close the order, free the table, and roll the
+ * result into today's summary — atomically. After this the bill is immutable
+ * (rules), so this is the ONLY moment a bill can be marked non-chargeable.
+ *
+ * A NON-CHARGEABLE settlement takes the same path — same transaction, same
+ * order/table close-out — and differs in exactly one respect: the money never
+ * enters the sales figures. It is kept out of `totalRevenue`, `orderCount`,
+ * `byPaymentMode`, `bySource` and `itemSales`, and tallied under `ncCount` /
+ * `ncAmount` / `byNcReason` instead. Keeping it out of `orderCount` matters as
+ * much as keeping it out of revenue: counted there, every comp would silently
+ * drag down the average order value.
+ *
+ * The bill doc keeps its REAL totals either way. What the comp was worth is
+ * the whole point of recording it.
  */
 export async function settleBill(
   bill: Bill,
   order: Order,
-  paymentMode: PaymentMode
+  settlement: Settlement
 ): Promise<void> {
   const summaryRef = paths.dailySummary(dayKey());
+  const isNc = settlement.kind === "nc";
 
   await runTransaction(db, async (tx) => {
     // ---- reads first (transaction requirement) ----
@@ -160,21 +193,27 @@ export async function settleBill(
       : null;
 
     // ---- derive updated summary from the order lines ----
-    const emptyModes = { cash: 0, upi: 0, card: 0 };
-    const emptySources = { "dine-in": 0, takeaway: 0, delivery: 0 };
-    const byPaymentMode = { ...emptyModes, ...(prev?.byPaymentMode ?? {}) };
-    const bySource = { ...emptySources, ...(prev?.bySource ?? {}) };
+    const byPaymentMode = { ...EMPTY_MODES, ...(prev?.byPaymentMode ?? {}) };
+    const bySource = { ...EMPTY_SOURCES, ...(prev?.bySource ?? {}) };
+    const byNcReason = { ...EMPTY_NC_REASONS, ...(prev?.byNcReason ?? {}) };
     const itemSales: DailySummary["itemSales"] = { ...(prev?.itemSales ?? {}) };
 
-    byPaymentMode[paymentMode] += bill.grandTotal;
-    bySource[order.orderType] += bill.grandTotal;
+    if (settlement.kind === "nc") {
+      byNcReason[settlement.reason] += bill.grandTotal;
+    } else {
+      byPaymentMode[settlement.mode] += bill.grandTotal;
+      bySource[order.orderType] += bill.grandTotal;
+    }
 
     let voidedItemCount = prev?.voidedItemCount ?? 0;
     for (const line of order.items) {
       if (line.voided) {
+        // A void is a void whoever settles the bill — always counted.
         voidedItemCount += 1;
         continue;
       }
+      // Comped food never enters Top Items: "best selling" has to mean sold.
+      if (isNc) continue;
       const entry = itemSales[line.menuItemId] ?? {
         name: line.name,
         qty: 0,
@@ -188,22 +227,42 @@ export async function settleBill(
     const nextSummary: DailySummary = {
       id: dayKey(),
       date: dayKey(),
-      totalRevenue: (prev?.totalRevenue ?? 0) + bill.grandTotal,
-      orderCount: (prev?.orderCount ?? 0) + 1,
+      totalRevenue: (prev?.totalRevenue ?? 0) + (isNc ? 0 : bill.grandTotal),
+      orderCount: (prev?.orderCount ?? 0) + (isNc ? 0 : 1),
       voidedItemCount,
       byPaymentMode,
       bySource,
       itemSales,
+      ncCount: (prev?.ncCount ?? 0) + (isNc ? 1 : 0),
+      ncAmount: (prev?.ncAmount ?? 0) + (isNc ? bill.grandTotal : 0),
+      byNcReason,
+      // Carried forward untouched — settling never cancels anything.
+      voidedBillCount: prev?.voidedBillCount ?? 0,
+      voidedRevenue: prev?.voidedRevenue ?? 0,
       updatedAt: serverTimestamp() as unknown as DailySummary["updatedAt"],
     };
 
     // ---- writes ----
     tx.set(summaryRef, nextSummary);
-    tx.update(paths.bill(bill.id), {
-      status: "paid",
-      paymentMode,
-      paidAt: serverTimestamp(),
-    });
+    // Totals are deliberately NOT in this update: the rules pin them to their
+    // stored values on an NC write, and re-sending them is how that breaks.
+    tx.update(
+      paths.bill(bill.id),
+      settlement.kind === "nc"
+        ? {
+            status: "paid",
+            paymentMode: null,
+            nonChargeable: true,
+            ncReason: settlement.reason,
+            ...(settlement.note ? { ncNote: settlement.note } : {}),
+            paidAt: serverTimestamp(),
+          }
+        : {
+            status: "paid",
+            paymentMode: settlement.mode,
+            paidAt: serverTimestamp(),
+          }
+    );
     tx.update(paths.order(order.id), {
       status: "closed",
       updatedAt: serverTimestamp(),
@@ -218,7 +277,157 @@ export async function settleBill(
   });
 }
 
-/** Reprint: the only mutation allowed on a paid bill (rules permit it). */
+/** Reprint: allowed on a paid bill, and on a cancelled one (rules permit it). */
 export async function reprintBill(billId: string, current: number): Promise<void> {
   await updateDoc(paths.bill(billId), { printedCount: current + 1 });
+}
+
+/**
+ * CANCEL (void) a settled bill — the restaurant served badly, is refunding the
+ * customer, and the sale must come back out of the day's figures.
+ *
+ * This is the exact inverse of `settleBill`, and it has to stay that way: it
+ * reverses whichever path the settle took. A CHARGED bill comes out of
+ * `totalRevenue`, `orderCount`, `byPaymentMode`, `bySource` and `itemSales`; a
+ * COMPED one was never in any of those, so only `ncCount`/`ncAmount`/
+ * `byNcReason` unwind. Getting that backwards would leave the day's revenue
+ * short by a bill that never contributed to it.
+ *
+ * Both then land in `voidedBillCount`/`voidedRevenue`, so the reversal is
+ * visible rather than a silent hole in the day.
+ *
+ * ONLY a bill paid on the current IST business day can be cancelled — enforced
+ * here AND in the rules. A day the owner has already read never moves.
+ *
+ * The refund itself happens outside the app: this records that it is owed and
+ * un-books the sale. The table is deliberately untouched — settling freed it,
+ * and by now it may be seating the next party.
+ */
+export async function voidBill(
+  bill: Bill,
+  actorUid: string,
+  reason: VoidReason,
+  note?: string
+): Promise<void> {
+  const trimmedNote = note?.trim().slice(0, 140);
+
+  await runTransaction(db, async (tx) => {
+    // ---- reads first (transaction requirement) ----
+    // Re-read rather than trust the snapshot the sheet is holding: a double
+    // tap, or a stale listener, must not decrement the day's summary twice.
+    const billSnap = await tx.get(paths.bill(bill.id));
+    if (!billSnap.exists()) throw new Error(`Bill ${bill.id} not found`);
+    const fresh = billSnap.data();
+
+    if (fresh.status === "void") {
+      throw new Error("This bill has already been cancelled.");
+    }
+    if (fresh.status !== "paid") {
+      throw new Error("Only a settled bill can be cancelled.");
+    }
+    if (!fresh.paidAt) {
+      throw new Error("This bill has no payment time and cannot be cancelled.");
+    }
+
+    // The day the bill was PAID — not today. A bill settled at 11:50pm and
+    // cancelled at 12:10am must come out of the day it went into.
+    const paidDay = dayKey(fresh.paidAt.toDate());
+    if (paidDay !== dayKey()) {
+      throw new Error(
+        "Only today's bills can be cancelled. This one was settled on an earlier day."
+      );
+    }
+
+    const orderSnap = await tx.get(paths.order(fresh.orderId));
+    if (!orderSnap.exists()) throw new Error(`Order ${fresh.orderId} not found`);
+    const order = orderSnap.data();
+
+    const summaryRef = paths.dailySummary(paidDay);
+    const summarySnap = await tx.get(summaryRef);
+    const prev = summarySnap.exists()
+      ? (summarySnap.data() as DailySummary)
+      : null;
+
+    // ---- derive the reversed summary ----
+    const wasNc = fresh.nonChargeable === true;
+    const byPaymentMode = { ...EMPTY_MODES, ...(prev?.byPaymentMode ?? {}) };
+    const bySource = { ...EMPTY_SOURCES, ...(prev?.bySource ?? {}) };
+    const byNcReason = { ...EMPTY_NC_REASONS, ...(prev?.byNcReason ?? {}) };
+    const itemSales: DailySummary["itemSales"] = { ...(prev?.itemSales ?? {}) };
+
+    // Every subtraction is clamped at zero. A bill settled before its summary
+    // bucket existed contributed nothing to reverse, and a negative total on
+    // the owner's report would be worse than an under-count.
+    const sub = (a: number, b: number) => Math.max(0, a - b);
+
+    if (wasNc) {
+      if (fresh.ncReason) {
+        byNcReason[fresh.ncReason] = sub(
+          byNcReason[fresh.ncReason],
+          fresh.grandTotal
+        );
+      }
+    } else {
+      if (fresh.paymentMode) {
+        byPaymentMode[fresh.paymentMode] = sub(
+          byPaymentMode[fresh.paymentMode],
+          fresh.grandTotal
+        );
+      }
+      bySource[order.orderType] = sub(
+        bySource[order.orderType],
+        fresh.grandTotal
+      );
+      // Top Items must lose the sale too, or a cancelled dish keeps its place
+      // in the best-sellers. Comped lines were never added, so skip them.
+      for (const line of order.items) {
+        if (line.voided) continue;
+        const entry = itemSales[line.menuItemId];
+        if (!entry) continue;
+        const qty = entry.qty - line.qty;
+        const revenue = entry.revenue - line.price * line.qty;
+        if (qty <= 0) delete itemSales[line.menuItemId];
+        else itemSales[line.menuItemId] = { ...entry, qty, revenue };
+      }
+    }
+
+    const nextSummary: DailySummary = {
+      id: paidDay,
+      date: paidDay,
+      totalRevenue: wasNc
+        ? (prev?.totalRevenue ?? 0)
+        : sub(prev?.totalRevenue ?? 0, fresh.grandTotal),
+      orderCount: wasNc ? (prev?.orderCount ?? 0) : sub(prev?.orderCount ?? 0, 1),
+      // Left alone: those lines really were voided in the kitchen during
+      // service, and cancelling the bill afterwards doesn't un-void them.
+      voidedItemCount: prev?.voidedItemCount ?? 0,
+      byPaymentMode,
+      bySource,
+      itemSales,
+      ncCount: wasNc ? sub(prev?.ncCount ?? 0, 1) : (prev?.ncCount ?? 0),
+      ncAmount: wasNc
+        ? sub(prev?.ncAmount ?? 0, fresh.grandTotal)
+        : (prev?.ncAmount ?? 0),
+      byNcReason,
+      voidedBillCount: (prev?.voidedBillCount ?? 0) + 1,
+      voidedRevenue: (prev?.voidedRevenue ?? 0) + fresh.grandTotal,
+      updatedAt: serverTimestamp() as unknown as DailySummary["updatedAt"],
+    };
+
+    // ---- writes ----
+    tx.set(summaryRef, nextSummary);
+    // Totals are deliberately NOT in this update — the rules pin the bill to
+    // the values it already holds, and re-sending them is how that breaks.
+    tx.update(paths.bill(bill.id), {
+      status: "void",
+      voidedAt: serverTimestamp(),
+      voidedBy: actorUid,
+      voidReason: reason,
+      ...(trimmedNote ? { voidNote: trimmedNote } : {}),
+    });
+    tx.update(paths.order(fresh.orderId), {
+      status: "cancelled",
+      updatedAt: serverTimestamp(),
+    });
+  });
 }

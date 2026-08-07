@@ -21,7 +21,12 @@ import { router } from "expo-router";
 import { formatMoney } from "@/lib/money";
 import { dayKey, formatTimeIST } from "@/lib/date";
 import { colors, radius, shadow, space } from "@/theme/theme";
-import type { Bill, PaymentMode } from "@/types/models";
+import {
+  NC_REASON_LABELS,
+  VOID_REASON_LABELS,
+  type Bill,
+  type PaymentMode,
+} from "@/types/models";
 import { BillDetail } from "./BillDetail";
 import { usePaidBills } from "./useCashierData";
 
@@ -50,6 +55,14 @@ export function BillHistoryScreen() {
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
 
   // Query is already paidAt-descending; bucket into IST business days.
+  //
+  // The day total counts CHARGED bills only, so it still reconciles against
+  // what's in the drawer. Comped bills are summed separately and shown beside
+  // it — visible, but never silently folded into the day's takings.
+  //
+  // Cancelled bills count towards NEITHER: the money went back. They stay in
+  // the list, struck through, because "this sale was refunded" is exactly what
+  // the owner scrolling back through the day needs to see.
   const sections = useMemo(() => {
     const byDay = new Map<string, (Bill & { id: string })[]>();
     for (const bill of bills) {
@@ -61,7 +74,16 @@ export function BillHistoryScreen() {
     }
     return [...byDay.entries()].map(([key, data]) => ({
       title: dayLabel(key),
-      total: data.reduce((sum, b) => sum + b.grandTotal, 0),
+      total: data.reduce(
+        (sum, b) =>
+          sum + (b.nonChargeable || b.status === "void" ? 0 : b.grandTotal),
+        0
+      ),
+      ncTotal: data.reduce(
+        (sum, b) =>
+          sum + (b.nonChargeable && b.status !== "void" ? b.grandTotal : 0),
+        0
+      ),
       data,
     }));
   }, [bills]);
@@ -95,6 +117,12 @@ export function BillHistoryScreen() {
             <Text style={styles.sectionTitle}>{section.title}</Text>
             <Text style={styles.sectionTotal}>
               {formatMoney(section.total)}
+              {section.ncTotal > 0 && (
+                <Text style={styles.sectionNc}>
+                  {"  + "}
+                  {formatMoney(section.ncTotal)} NC
+                </Text>
+              )}
             </Text>
           </View>
         )}
@@ -105,22 +133,50 @@ export function BillHistoryScreen() {
           >
             <View style={styles.cardTop}>
               <Text style={styles.cardTitleText}>{item.tableLabel}</Text>
-              <Text style={styles.cardTotal}>
+              <Text
+                style={[
+                  styles.cardTotal,
+                  item.nonChargeable && styles.cardTotalNc,
+                  item.status === "void" && styles.cardTotalVoid,
+                ]}
+              >
                 {formatMoney(item.grandTotal)}
               </Text>
             </View>
             <View style={styles.cardBottom}>
               <Text style={styles.cardMeta}>
                 {item.paidAt ? formatTimeIST(item.paidAt.toDate()) : ""}
-                {item.paymentMode
-                  ? ` · ${MODE_LABELS[item.paymentMode]}`
-                  : ""}
+                {item.status === "void"
+                  ? ` · ${
+                      item.voidReason
+                        ? VOID_REASON_LABELS[item.voidReason]
+                        : "Cancelled"
+                    }`
+                  : item.nonChargeable
+                    ? ` · ${
+                        item.ncReason
+                          ? NC_REASON_LABELS[item.ncReason]
+                          : "Non-chargeable"
+                      }`
+                    : item.paymentMode
+                      ? ` · ${MODE_LABELS[item.paymentMode]}`
+                      : ""}
               </Text>
-              <Text style={styles.cardMeta}>
-                {item.printedCount > 0
-                  ? `Printed ${item.printedCount}×`
-                  : "Not printed"}
-              </Text>
+              {item.status === "void" ? (
+                <View style={styles.voidPill}>
+                  <Text style={styles.voidPillText}>CANCELLED</Text>
+                </View>
+              ) : item.nonChargeable ? (
+                <View style={styles.ncPill}>
+                  <Text style={styles.ncPillText}>NC</Text>
+                </View>
+              ) : (
+                <Text style={styles.cardMeta}>
+                  {item.printedCount > 0
+                    ? `Printed ${item.printedCount}×`
+                    : "Not printed"}
+                </Text>
+              )}
             </View>
           </Pressable>
         )}
@@ -189,6 +245,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   sectionTotal: { fontSize: 13, fontWeight: "700", color: colors.textMuted },
+  sectionNc: { color: colors.ncAmber },
 
   card: {
     backgroundColor: colors.surface,
@@ -207,6 +264,33 @@ const styles = StyleSheet.create({
   },
   cardTitleText: { fontSize: 16, fontWeight: "700", color: colors.text },
   cardTotal: { fontSize: 16, fontWeight: "800", color: colors.primary },
+  // Comped: shown, but never coloured like money that came in.
+  cardTotalNc: {
+    color: colors.textMuted,
+    textDecorationLine: "line-through",
+  },
+  ncPill: {
+    paddingHorizontal: space.s2,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.ncAmberSoft,
+    borderWidth: 1,
+    borderColor: colors.ncAmberBorder,
+  },
+  ncPillText: { fontSize: 11, fontWeight: "800", color: colors.ncAmber },
+  cardTotalVoid: {
+    color: colors.danger,
+    textDecorationLine: "line-through",
+  },
+  voidPill: {
+    paddingHorizontal: space.s2,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.statusRedSoft,
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
+  voidPillText: { fontSize: 11, fontWeight: "800", color: colors.danger },
   cardBottom: {
     flexDirection: "row",
     justifyContent: "space-between",

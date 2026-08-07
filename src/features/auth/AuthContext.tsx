@@ -19,11 +19,24 @@
  * — no app restart needed. `profile` is only non-null for a usable account
  * (approved + active); every other signed-in state is described by `gate`.
  *
- * TRIAL EXPIRY: a demo account carries `expiresAt`. Because expiry is a clock
- * event rather than a write, no snapshot fires at the deadline — a timer does
- * the work (see the expiry effect below), flipping `gate` to "expired" and
- * signing the device out. Accounts with NO `expiresAt` never expire; that's the
- * default and it is what every real customer has.
+ * TRIAL EXPIRY: the deadline is resolved from TWO documents, and the earlier of
+ * them wins:
+ *
+ *   the RESTAURANT   restaurants/{rid}   trialStartedAt (+2d) or expiresAt
+ *   the ACCOUNT      users/{uid}         expiresAt
+ *
+ * The restaurant doc is the important one. Every new restaurant is born a
+ * 2-day trial and its whole staff is gated by that single field — a waiter who
+ * joined with a join code carries no expiry of their own, so reading only the
+ * user profile would leave them looking fine on the client while every query
+ * failed server-side. Both docs are watched live, and the root doc stays
+ * readable after expiry (rules: `isMember()`, no expiry check) precisely so
+ * this screen can explain itself.
+ *
+ * Because expiry is a clock event rather than a write, no snapshot fires at the
+ * deadline — a timer does the work (see the expiry effect below), flipping
+ * `gate` to "expired". A restaurant with NO trial fields never expires; that is
+ * what activating a paying customer produces.
  */
 import {
   createContext,
@@ -48,9 +61,14 @@ import {
   registerRestaurant,
   type SignupRole,
 } from "@/features/auth/signupApi";
-import type { AppUser, Role } from "@/types/models";
+import type { AppUser, RestaurantProfile, Role } from "@/types/models";
 
 export type { SignupRole };
+
+/** Trial length. MUST match `trialLength()` in firestore.rules — the rules are
+ *  what actually enforce it; this only drives the countdown and the screen. */
+const TRIAL_DAYS = 2;
+const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
 const NOT_LINKED_MESSAGE =
   "This account isn't linked to any restaurant. Sign up again with your " +
@@ -92,7 +110,13 @@ interface AuthState {
   role: Role | null;
   /** The restaurant this login belongs to (null until resolved / signed out). */
   restaurantId: string | null;
+  /** Its display name — readable even once expired, so the "trial ended"
+   *  screen can name the restaurant it's talking about. */
+  restaurantName: string | null;
   gate: GateStatus;
+  /** When this workspace stops working (ms epoch), or null if it never does.
+   *  Drives the countdown banner; NOT the enforcement (that's firestore.rules). */
+  trialEndsAt: number | null;
   loading: boolean;
   /** Set when the app had to force-sign-out (e.g. account not linked to a
    *  restaurant) — the login screen shows it. */
@@ -120,6 +144,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
   const [rawProfile, setRawProfile] = useState<AppUser | null>(null);
+  // The restaurant root doc — watched for its trial fields (see the expiry
+  // section below). Readable even by an expired member, by design.
+  const [restaurantDoc, setRestaurantDoc] = useState<RestaurantProfile | null>(
+    null,
+  );
   // True only when the snapshot positively said "no such doc" (vs. an error,
   // which we treat as signed-out rather than "account removed").
   const [docMissing, setDocMissing] = useState(false);
@@ -129,6 +158,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let unsubIndex: (() => void) | null = null;
     let unsubProfile: (() => void) | null = null;
+    let unsubRestaurant: (() => void) | null = null;
     let profileRid: string | null = null;
 
     const unsubAuth = onAuthStateChanged(auth, (user) => {
@@ -136,12 +166,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsubIndex = null;
       unsubProfile?.();
       unsubProfile = null;
+      unsubRestaurant?.();
+      unsubRestaurant = null;
       profileRid = null;
       setFirebaseUser(user);
       if (!user) {
         setActiveRestaurantId(null);
         setRestaurantId(null);
         setRawProfile(null);
+        setRestaurantDoc(null);
         setDocMissing(false);
         setLoading(false);
         return;
@@ -170,6 +203,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setRawProfile(null);
             setDocMissing(false);
             setLoading(false);
+          },
+        );
+
+        // The workspace's trial clock. Live, because activation is a WRITE to
+        // this doc — the moment the owner is activated, every signed-in device
+        // in the restaurant unblocks without a restart.
+        unsubRestaurant?.();
+        unsubRestaurant = onSnapshot(
+          paths.restaurantProfile(),
+          (snap) => setRestaurantDoc(snap.exists() ? snap.data() : null),
+          (e) => {
+            // Unreadable (offline, or not a member). Fall back to the account
+            // field alone rather than locking someone out on a network blip.
+            console.warn("[auth] failed to load restaurant profile:", e);
+            setRestaurantDoc(null);
           },
         );
       };
@@ -209,6 +257,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       unsubIndex?.();
       unsubProfile?.();
+      unsubRestaurant?.();
       unsubAuth();
     };
   }, []);
@@ -224,9 +273,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // won't fire early — every query still fails server-side, so nothing is
   // extended; they simply see errors instead of the friendly screen.
   //
-  // No expiresAt = permanent account = never expires. Never written as
-  // "expiresAt must be in the future".
-  const expiresAtMs = rawProfile?.expiresAt?.toMillis() ?? null;
+  // No trial fields = permanent = never expires. Never written as "expiresAt
+  // must be in the future" — that form would lock out every paying customer.
+  //
+  // Mirrors firestore.rules exactly. On the RESTAURANT an explicit expiresAt
+  // overrides the computed trial deadline (`tenantNotExpired`); on the ACCOUNT
+  // expiresAt stands alone (`selfNotExpired`). Either level can close the app,
+  // so the EARLIER of the two wins — and null at a level means that level
+  // imposes no deadline at all.
+  const tenantEndsAt =
+    restaurantDoc?.expiresAt?.toMillis() ??
+    (restaurantDoc?.trialStartedAt
+      ? restaurantDoc.trialStartedAt.toMillis() + TRIAL_MS
+      : null);
+  const accountEndsAt = rawProfile?.expiresAt?.toMillis() ?? null;
+  const expiresAtMs =
+    tenantEndsAt === null
+      ? accountEndsAt
+      : accountEndsAt === null
+        ? tenantEndsAt
+        : Math.min(tenantEndsAt, accountEndsAt);
   const [expired, setExpired] = useState(false);
 
   useEffect(() => {
@@ -258,12 +324,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [expiresAtMs]);
 
-  // Deadline reached mid-session: explain, then end the session for real. The
-  // notice survives the sign-out and renders on the login screen.
+  // Deadline reached mid-session. The session is deliberately NOT ended: `gate`
+  // flips to "expired" and the app parks on /pending, which explains what
+  // happened and offers a way to get in touch. Signing out would bounce them to
+  // a login screen where the only option is to re-enter credentials that no
+  // longer work — and, more importantly, activation is a live write to the
+  // restaurant doc, so a device that stays signed in unblocks by itself the
+  // moment the owner pays. The notice is staged anyway, so it still explains
+  // things if they sign out by hand from that screen.
   useEffect(() => {
     if (!expired || !firebaseUser) return;
     setNotice(TRIAL_ENDED_MESSAGE);
-    fbSignOut(auth).catch(() => {});
   }, [expired, firebaseUser]);
 
   const usable =
@@ -296,7 +367,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     profile,
     role: profile?.role ?? null,
     restaurantId,
+    restaurantName: restaurantDoc?.name ?? null,
     gate,
+    trialEndsAt: expiresAtMs,
     loading,
     notice,
     signIn: async (email, password) => {

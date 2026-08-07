@@ -222,6 +222,8 @@ function statusMeta(status: Bill["status"]): { label: string; bg: string; fg: st
       return { label: "In progress", bg: colors.primarySoft, fg: colors.primary };
     case "paid":
       return { label: "Paid", bg: colors.surfaceMuted, fg: colors.textMuted };
+    case "void":
+      return { label: "Cancelled", bg: colors.statusRedSoft, fg: colors.danger };
     default:
       return { label: status, bg: colors.surfaceMuted, fg: colors.textMuted };
   }

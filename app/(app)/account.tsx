@@ -5,6 +5,7 @@ import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
 import { ReceiptDetailsCard } from "@/features/settings/ReceiptDetailsCard";
 import { PrinterSettingsCard } from "@/features/settings/PrinterSettingsCard";
+import { TrialStatusCard } from "@/features/settings/TrialStatusCard";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
@@ -43,6 +44,9 @@ export default function AccountRoute() {
           <Text style={styles.roleText}>{profile?.role.toUpperCase()}</Text>
         </View>
       </View>
+
+      {/* Renders nothing once the restaurant is activated (permanent). */}
+      <TrialStatusCard />
 
       {canToggleGst && (
         <View style={styles.settingsCard}>

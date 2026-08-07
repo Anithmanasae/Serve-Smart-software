@@ -13,7 +13,11 @@
     "trial:seed": "node scripts/seedTrial.js",
     "trial:reset": "node scripts/resetTrial.js",
     "trial:audit": "node scripts/auditTenants.js",
+    "activate": "node scripts/activateTenant.js",
+    "reassign-owner": "node scripts/reassignCashier.js",
     "verify:env": "node scripts/verifyBuildEnv.js",
+    "eas-build-post-install": "node scripts/assertBuildTarget.js",
+    "build:smartserve": "eas build --platform android --profile smartserve",
     "compress-images": "node scripts/compressMenuImages.js",
     "brand": "node scripts/generateBrandAssets.js"
   },

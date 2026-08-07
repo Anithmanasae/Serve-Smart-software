@@ -193,7 +193,7 @@ async function main() {
 
   order = await fetchOrder(orderId);
   assert(order.status === "billed", "order marked billed");
-  await settleBill(bill, order, "cash");
+  await settleBill(bill, order, { kind: "paid", mode: "cash" });
 
   const [paidBill, closedOrder, freedTable] = await Promise.all([
     getDoc(paths.bill(billId)),

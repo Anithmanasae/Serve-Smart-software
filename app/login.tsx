@@ -57,14 +57,15 @@ export default function Login() {
         <View style={styles.brand}>
           <BrandLogo size={88} />
           <Text style={styles.sub}>Sign in to continue</Text>
-          {/* Verification you can see without a debugger. The chip proves
-              EXPO_PUBLIC_DEMO_MODE reached the bundle; the project id proves
-              WHICH Firebase backend this APK talks to. A build can silently
-              pick up EAS's stored env vars instead of .env.local, and the only
-              other symptom is a valid login being rejected. */}
+          {/* Build verification you can see without a debugger: WHICH Firebase
+              backend this APK talks to. A build can silently pick up EAS's
+              stored env vars instead of .env.local, and the only other symptom
+              is a valid login being rejected. DEMO_MODE no longer changes any
+              behaviour — trials are enforced server-side for every build — so
+              this is purely a diagnostic marker for non-production APKs. */}
           {DEMO_MODE && (
             <View style={styles.demoChip}>
-              <Text style={styles.demoChipText}>DEMO BUILD · FREE TRIAL</Text>
+              <Text style={styles.demoChipText}>TEST BUILD</Text>
               <Text style={styles.demoChipProject}>{FIREBASE_PROJECT_ID}</Text>
             </View>
           )}
@@ -107,21 +108,23 @@ export default function Login() {
             </Text>
           </Pressable>
 
-          {/* Demo builds ship with pre-made trial logins, so self-signup is
-              hidden — a prospect can't register their own restaurant halfway
-              through the demo. Production builds are unaffected. */}
-          {!DEMO_MODE && (
-            <Pressable
-              style={({ pressed }) => [styles.signupLink, pressed && { opacity: 0.6 }]}
-              onPress={() => router.push("/signup")}
-              disabled={busy}
-            >
-              <Text style={styles.signupText}>
-                New staff member?{" "}
-                <Text style={styles.signupTextBold}>Create an account</Text>
+          {/* Open in EVERY build. Self-signup IS the trial: registering a new
+              restaurant starts a server-stamped 2-day clock, so one APK can be
+              handed to any number of prospects and each gets their own private
+              workspace. Hiding this used to be the demo build's whole job;
+              enforcement now lives in firestore.rules, where it belongs. */}
+          <Pressable
+            style={({ pressed }) => [styles.signupLink, pressed && { opacity: 0.6 }]}
+            onPress={() => router.push("/signup")}
+            disabled={busy}
+          >
+            <Text style={styles.signupText}>
+              New here?{" "}
+              <Text style={styles.signupTextBold}>
+                Start a free 2-day trial
               </Text>
-            </Pressable>
-          )}
+            </Text>
+          </Pressable>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

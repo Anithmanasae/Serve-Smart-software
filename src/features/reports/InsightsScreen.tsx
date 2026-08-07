@@ -19,10 +19,16 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { formatMoney } from "@/lib/money";
-import type { OrderType, PaymentMode } from "@/types/models";
+import {
+  NC_REASONS,
+  NC_REASON_LABELS,
+  type OrderType,
+  type PaymentMode,
+} from "@/types/models";
 import {
   computeDelta,
   currentRange,
+  ncReasonSummary,
   paymentSummary,
   previousRange,
   revenueSeries,
@@ -97,7 +103,9 @@ export function InsightsScreen() {
       revenue: computeDelta(totals.totalRevenue, prevTotals.totalRevenue),
       orders: computeDelta(totals.orderCount, prevTotals.orderCount),
       aov: computeDelta(totals.avgOrderValue, prevTotals.avgOrderValue),
-      voided: computeDelta(totals.voidedItemCount, prevTotals.voidedItemCount),
+      voided: computeDelta(totals.voidedBillCount, prevTotals.voidedBillCount),
+      nc: computeDelta(totals.ncAmount, prevTotals.ncAmount),
+      ncCount: computeDelta(totals.ncCount, prevTotals.ncCount),
     }),
     [totals, prevTotals]
   );
@@ -109,6 +117,7 @@ export function InsightsScreen() {
   const items = useMemo(() => topItems(curSummaries), [curSummaries]);
   const source = useMemo(() => sourceSummary(curSummaries), [curSummaries]);
   const payment = useMemo(() => paymentSummary(curSummaries), [curSummaries]);
+  const ncByReason = useMemo(() => ncReasonSummary(curSummaries), [curSummaries]);
 
   const rangeLabel =
     RANGE_OPTIONS.find((o) => o.key === rangeKind)?.label ?? "";
@@ -208,10 +217,34 @@ export function InsightsScreen() {
                   value={formatMoney(totals.avgOrderValue)}
                   delta={deltas.aov}
                 />
+                {/* Revenue above is already NET of these — the cancelled sale
+                    was reversed out of it. This tile is what stops a refund
+                    from looking like a sale that simply never happened. */}
                 <KpiCard
-                  label="Voided Items"
-                  value={String(totals.voidedItemCount)}
+                  label="Cancelled Bills"
+                  value={
+                    totals.voidedBillCount === 0
+                      ? "0"
+                      : `${totals.voidedBillCount} · ${formatMoney(
+                          totals.voidedRevenue
+                        )}`
+                  }
                   delta={deltas.voided}
+                />
+              </View>
+              {/* Non-chargeable sits alongside the headline numbers, not buried
+                  in a sub-report: a comp is money the restaurant chose not to
+                  take, and it should be as visible as the money it did. */}
+              <View style={styles.kpiRow}>
+                <KpiCard
+                  label="Non-Chargeable"
+                  value={formatMoney(totals.ncAmount)}
+                  delta={deltas.nc}
+                />
+                <KpiCard
+                  label="NC Bills"
+                  value={String(totals.ncCount)}
+                  delta={deltas.ncCount}
                 />
               </View>
 
@@ -295,8 +328,16 @@ export function InsightsScreen() {
                     value={formatMoney(totals.avgOrderValue)}
                   />
                   <SummaryStat
-                    label="Voided"
-                    value={String(totals.voidedItemCount)}
+                    label="Cancelled"
+                    value={formatMoney(totals.voidedRevenue)}
+                  />
+                  <SummaryStat
+                    label="Comped"
+                    value={formatMoney(totals.ncAmount)}
+                  />
+                  <SummaryStat
+                    label="NC Bills"
+                    value={String(totals.ncCount)}
                   />
                 </View>
               </View>
@@ -371,6 +412,35 @@ export function InsightsScreen() {
                     </Text>
                   </View>
                 ))}
+              </View>
+
+              {/* Non-chargeable breakdown — the point of fixed reasons: this
+                  is the only view that answers "which kind of comp, and how
+                  much?". Rendered even at zero so it never looks missing. */}
+              <View style={styles.card}>
+                <View style={styles.cardHeaderRow}>
+                  <Text style={styles.cardTitle}>Non-Chargeable</Text>
+                  <Text style={styles.ncTotalText}>
+                    {formatMoney(totals.ncAmount)}
+                  </Text>
+                </View>
+                {totals.ncCount === 0 ? (
+                  <Text style={styles.emptyText}>
+                    No bills were comped in this period.
+                  </Text>
+                ) : (
+                  NC_REASONS.filter((r) => ncByReason[r] > 0).map((r) => (
+                    <View key={r} style={styles.sourceRow}>
+                      <Text style={styles.sourceIcon}>🎁</Text>
+                      <Text style={styles.sourceLabel}>
+                        {NC_REASON_LABELS[r]}
+                      </Text>
+                      <Text style={styles.sourceValue}>
+                        {formatMoney(ncByReason[r])}
+                      </Text>
+                    </View>
+                  ))
+                )}
               </View>
             </>
           )}
@@ -515,6 +585,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
     color: colors.primary,
+  },
+  ncTotalText: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: colors.ncAmber,
   },
   emptyText: {
     fontSize: 14,

@@ -13,7 +13,6 @@ import { Redirect, router } from "expo-router";
 import { useAuth, type SignupRole } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
-import { DEMO_MODE } from "@/lib/firebase";
 import { colors, space, radius } from "@/theme/theme";
 
 type Mode = "create" | "join";
@@ -23,10 +22,17 @@ type Mode = "create" | "join";
  *
  *  - "New restaurant": the owner names their restaurant and becomes its
  *    approved cashier in one atomic registration (their own one-time owner
- *    seat — every restaurant gets exactly one, enforced server-side).
+ *    seat — every restaurant gets exactly one, enforced server-side). This is
+ *    also the TRIAL entry point: the server stamps a 2-day clock on the new
+ *    workspace, and it stays a trial until the owner is activated by hand.
  *  - "Join a restaurant": staff enter the join code their manager shares
  *    (shown on the cashier's Account screen) and land in the existing
- *    waiting-for-approval flow.
+ *    waiting-for-approval flow. They get NO clock of their own — they live or
+ *    die with the restaurant they joined.
+ *
+ * This screen is open in every build. The trial is enforced server-side, so
+ * there is nothing to hide: a prospect and a real new customer take the exact
+ * same path, and the difference is whether you activate them afterwards.
  */
 export default function Signup() {
   const { registerRestaurant, joinRestaurant, profile } = useAuth();
@@ -43,9 +49,6 @@ export default function Signup() {
 
   // Already signed in with a usable account → nothing to sign up for.
   if (profile) return <Redirect href={homePathForRole(profile.role)} />;
-  // Demo build: signup is hidden on the login screen, but the route still
-  // exists (deep link, back-stack) — bounce it so there's no way in.
-  if (DEMO_MODE) return <Redirect href="/login" />;
 
   async function onSubmit() {
     if (mode === "create" && !restaurantName.trim()) {
@@ -115,6 +118,13 @@ export default function Signup() {
               ? "Create your restaurant and its owner (cashier) account"
               : "Your account needs the cashier's approval before you can sign in"}
           </Text>
+          {mode === "create" && (
+            <View style={styles.trialChip}>
+              <Text style={styles.trialChipText}>
+                FREE FOR 2 DAYS · NO CARD NEEDED
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.form}>
@@ -280,6 +290,21 @@ const styles = StyleSheet.create({
   logo: { fontSize: 44 },
   title: { fontSize: 26, fontWeight: "800", color: colors.primary },
   sub: { color: colors.textMuted, textAlign: "center" },
+  trialChip: {
+    marginTop: space.s1,
+    paddingVertical: space.s2,
+    paddingHorizontal: space.s4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surface,
+  },
+  trialChipText: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.6,
+  },
   form: { gap: space.s3 },
   modeRow: {
     flexDirection: "row",

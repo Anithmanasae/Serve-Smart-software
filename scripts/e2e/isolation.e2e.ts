@@ -202,7 +202,7 @@ async function seedSale(cashierUid: string): Promise<string> {
     ...(await getDoc(paths.order(created.orderId))).data()!,
     id: created.orderId,
   } as Order;
-  await settleBill(bill, billedOrder, "cash");
+  await settleBill(bill, billedOrder, { kind: "paid", mode: "cash" });
   return billId;
 }
 
@@ -265,9 +265,15 @@ async function main() {
   setActiveRestaurantId(ridA);
   await assertNoAccess("owner A", ridB, menuB);
 
-  // A can still read its own data (sanity that denials above weren't global)
+  // A can still read its own data (sanity that denials above weren't global).
+  // Asserted on the item this suite seeded rather than a total count —
+  // registration also lays down a starter menu (see features/auth/starterData),
+  // so the collection is legitimately larger than what's seeded here.
   const ownMenu = await getDocs(paths.menuItems());
-  assert(ownMenu.size === 1, "owner A still reads own menu");
+  assert(
+    ownMenu.docs.some((d) => d.id === menuA),
+    "owner A still reads own menu",
+  );
   ok("owners retain full access to their own restaurant");
 
   // ── 4. Staff joins A by join code; approval lifecycle ────────────────────
@@ -294,7 +300,10 @@ async function main() {
   await approveStaff(waiterAUid);
   await signIn(WAITER_A);
   const menuAsWaiter = await getDocs(paths.menuItems());
-  assert(menuAsWaiter.size === 1, "approved waiter reads A menu");
+  assert(
+    menuAsWaiter.docs.some((d) => d.id === menuA),
+    "approved waiter reads A menu",
+  );
   ok("cashier approved the waiter (existing flow intact)");
 
   // The approved waiter of A still gets nothing of B

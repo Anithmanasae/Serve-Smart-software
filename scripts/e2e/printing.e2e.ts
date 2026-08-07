@@ -84,7 +84,7 @@ async function takeawayBill(cashierUid: string): Promise<Bill> {
     ...(await getDoc(paths.order(created.orderId))).data()!,
     id: created.orderId,
   } as Order;
-  await settleBill(bill, billedOrder, "cash");
+  await settleBill(bill, billedOrder, { kind: "paid", mode: "cash" });
   return bill;
 }
 

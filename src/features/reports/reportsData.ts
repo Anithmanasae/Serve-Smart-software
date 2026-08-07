@@ -12,10 +12,12 @@ import { query, where } from "firebase/firestore";
 import { paths } from "@/lib/firestore/paths";
 import { useCollectionData } from "@/lib/firestore/useRealtime";
 import { dayKey } from "@/lib/date";
-import type {
-  DailySummary,
-  OrderType,
-  PaymentMode,
+import {
+  NC_REASONS,
+  type DailySummary,
+  type NcReason,
+  type OrderType,
+  type PaymentMode,
 } from "@/types/models";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -111,6 +113,16 @@ export interface Totals {
   orderCount: number;
   voidedItemCount: number;
   avgOrderValue: number; // paise; 0 when no orders
+  /** NON-CHARGEABLE: comped bills, counted only here. They are absent from
+   *  totalRevenue and orderCount by design, so avgOrderValue stays a figure
+   *  about food that was actually sold. */
+  ncCount: number;
+  ncAmount: number; // paise given away
+  /** CANCELLED: settled bills that were later voided and refunded. Their sale
+   *  has already been reversed out of totalRevenue and orderCount, so these
+   *  two are the only remaining trace of it. */
+  voidedBillCount: number;
+  voidedRevenue: number; // paise refunded
 }
 
 /** Sum the headline metrics across a set of summaries. */
@@ -118,13 +130,32 @@ export function sumTotals(summaries: DailySummary[]): Totals {
   let totalRevenue = 0;
   let orderCount = 0;
   let voidedItemCount = 0;
+  let ncCount = 0;
+  let ncAmount = 0;
+  let voidedBillCount = 0;
+  let voidedRevenue = 0;
   for (const s of summaries) {
     totalRevenue += s.totalRevenue ?? 0;
     orderCount += s.orderCount ?? 0;
     voidedItemCount += s.voidedItemCount ?? 0;
+    // Absent on summaries written before NC existed.
+    ncCount += s.ncCount ?? 0;
+    ncAmount += s.ncAmount ?? 0;
+    // Absent on summaries written before cancellation existed.
+    voidedBillCount += s.voidedBillCount ?? 0;
+    voidedRevenue += s.voidedRevenue ?? 0;
   }
   const avgOrderValue = orderCount > 0 ? Math.round(totalRevenue / orderCount) : 0;
-  return { totalRevenue, orderCount, voidedItemCount, avgOrderValue };
+  return {
+    totalRevenue,
+    orderCount,
+    voidedItemCount,
+    avgOrderValue,
+    ncCount,
+    ncAmount,
+    voidedBillCount,
+    voidedRevenue,
+  };
 }
 
 export type DeltaDirection = "up" | "down" | "neutral";
@@ -221,6 +252,22 @@ export function paymentSummary(
   for (const s of summaries) {
     for (const key of Object.keys(out) as PaymentMode[]) {
       out[key] += s.byPaymentMode?.[key] ?? 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Sum comped value by reason across summaries — the answer to "what are the
+ * free meals actually costing me, and which kind?".
+ */
+export function ncReasonSummary(
+  summaries: DailySummary[]
+): Record<NcReason, number> {
+  const out = { owner: 0, staff: 0, complaint: 0, pr: 0, other: 0 };
+  for (const s of summaries) {
+    for (const key of NC_REASONS) {
+      out[key] += s.byNcReason?.[key] ?? 0;
     }
   }
   return out;

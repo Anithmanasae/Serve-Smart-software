@@ -49,11 +49,23 @@ export interface RestaurantProfile {
    *  billing switch is still the device-local SettingsContext. */
   gstEnabled?: boolean;
   /**
-   * TRIAL WORKSPACES ONLY. When present, every role check inside this
-   * restaurant fails once the SERVER clock passes it (firestore.rules
-   * `tenantNotExpired`). ABSENT = NEVER EXPIRES — real customers have no such
-   * field and are entirely unaffected. Written only by scripts/seedTrial.js
-   * via the Admin SDK; no client can set, change or clear it.
+   * SELF-SERVE TRIALS. Stamped by the SERVER at registration — the create rule
+   * demands `trialStartedAt == request.time`, which only a serverTimestamp()
+   * sentinel satisfies, so a client can neither backdate nor omit it. The
+   * deadline is COMPUTED as `trialStartedAt + 2 days` in firestore.rules
+   * (`trialLength()`), never stored, so there is nothing to tamper with.
+   *
+   * Every new restaurant has this. Activating a paying customer DELETES it.
+   */
+  trialStartedAt?: Ts;
+  /**
+   * An explicit deadline that OVERRIDES the computed one — a custom trial
+   * length, or a subscription's paid-through date. Written only through the
+   * Admin SDK (scripts/seedTrial.js, the activation tooling); no client can
+   * set, change or clear it.
+   *
+   * ABSENT trialStartedAt AND expiresAt = NEVER EXPIRES. Real customers have
+   * neither field and are entirely unaffected by the expiry rules.
    */
   expiresAt?: Ts;
   updatedAt: Ts;
@@ -234,6 +246,64 @@ export type BillStatus = "requested" | "finalized" | "paid" | "void";
 
 export type PaymentMode = "cash" | "upi" | "card";
 
+/**
+ * Why a bill was comped (see `Bill.nonChargeable`). A fixed set rather than
+ * free text, because the owner's question is "what did staff meals cost me
+ * this month?" — only a stable key can be totalled. The detail goes in
+ * `ncNote`.
+ */
+export type NcReason = "owner" | "staff" | "complaint" | "pr" | "other";
+
+/** Display order for the reason chips and the NC report breakdown. */
+export const NC_REASONS: readonly NcReason[] = [
+  "owner",
+  "staff",
+  "complaint",
+  "pr",
+  "other",
+];
+
+export const NC_REASON_LABELS: Record<NcReason, string> = {
+  owner: "Owner / Family",
+  staff: "Staff Meal",
+  complaint: "Complaint / Remake",
+  pr: "PR / Influencer",
+  other: "Other",
+};
+
+/**
+ * Why a settled bill was CANCELLED (see `Bill.voidReason`). Same fixed-set
+ * reasoning as `NcReason`: the owner's question is "how often are we having to
+ * refund bad food?", and only a stable key can be totalled.
+ *
+ * A void is not a comp. NC is decided BEFORE money changes hands — the meal is
+ * given away. A void undoes a payment that was already taken: the customer was
+ * charged, something went wrong, and the money goes back.
+ */
+export type VoidReason =
+  | "bad-food"
+  | "wrong-order"
+  | "customer-complaint"
+  | "billing-error"
+  | "other";
+
+/** Display order for the reason chips. */
+export const VOID_REASONS: readonly VoidReason[] = [
+  "bad-food",
+  "wrong-order",
+  "customer-complaint",
+  "billing-error",
+  "other",
+];
+
+export const VOID_REASON_LABELS: Record<VoidReason, string> = {
+  "bad-food": "Bad Food",
+  "wrong-order": "Wrong Order",
+  "customer-complaint": "Customer Complaint",
+  "billing-error": "Billing Error",
+  other: "Other",
+};
+
 export interface Bill {
   id: string;
   /** Sequential human-facing number minted from counters/billNumber (printed
@@ -253,6 +323,40 @@ export interface Bill {
   grandTotal: number;
   status: BillStatus;
   paymentMode: PaymentMode | null;
+  /**
+   * NON-CHARGEABLE ("NC") — the meal was comped: nothing was collected and this
+   * bill is excluded from every revenue figure. ABSENT = an ordinary chargeable
+   * bill; the same "absence is the safe default" property the trial fields use,
+   * so a bill can only become free if someone explicitly said so.
+   *
+   * Written ONLY on the settle write (`settleBill`), never at bill creation,
+   * and frozen afterwards because the bill is then `paid` (rules). That same
+   * write is pinned by the rules to the bill's existing subtotal/gstTotal/
+   * grandTotal, so the value of a comp can never be zeroed out to hide it.
+   */
+  nonChargeable?: boolean;
+  /** Why it was comped. The rules require it whenever nonChargeable is true. */
+  ncReason?: NcReason;
+  /** Optional free-text detail alongside the preset reason (<= 140 chars). */
+  ncNote?: string;
+  /**
+   * CANCELLED ("VOID") — the bill was settled and then reversed, and the sale
+   * has been backed out of that day's summary. ABSENT = a live transaction,
+   * the same "absence is the safe default" property NC and the trial fields
+   * use: a bill is only cancelled because someone explicitly cancelled it.
+   *
+   * Only a bill paid on the CURRENT IST business day can be cancelled (rules),
+   * so a day whose figures the owner has already read never changes underneath
+   * them. `status` moves 'paid' -> 'void' and stays there — void is terminal.
+   *
+   * The bill keeps its real totals. What the cancellation was worth is the
+   * whole point of recording it.
+   */
+  voidedAt?: Ts;
+  voidedBy?: string; // cashier/admin uid, pinned to request.auth.uid by rules
+  voidReason?: VoidReason;
+  /** Optional free-text detail alongside the preset reason (<= 140 chars). */
+  voidNote?: string;
   requestedBy: string; // waiter uid
   cashierId: string | null;
   printedCount: number;
@@ -274,5 +378,26 @@ export interface DailySummary {
   bySource: Record<OrderType, number>;
   /** menuItemId -> { name, qty, revenue } */
   itemSales: Record<string, { name: string; qty: number; revenue: number }>;
+  /**
+   * NON-CHARGEABLE totals. Comped bills are deliberately absent from
+   * totalRevenue, orderCount, byPaymentMode, bySource and itemSales — they are
+   * tallied only here, so the owner can see what comps cost without them
+   * inflating sales or dragging down avg order value.
+   *
+   * Absent on summaries written before NC existed; always read with `?? 0`.
+   */
+  ncCount?: number;
+  ncAmount?: number; // paise — the value given away
+  byNcReason?: Record<NcReason, number>; // paise per reason
+  /**
+   * CANCELLED bills. A void REVERSES its sale out of the buckets above — the
+   * figures stay truthful — and is tallied here so the reversal is still
+   * visible. Without these two the money would simply vanish from the day and
+   * nobody could tell a cancelled sale from one that never happened.
+   *
+   * Absent on summaries written before voids existed; always read with `?? 0`.
+   */
+  voidedBillCount?: number;
+  voidedRevenue?: number; // paise refunded
   updatedAt: Ts;
 }

@@ -8,17 +8,24 @@ rules_version = '2';
 // client. Every money-sensitive invariant lives here:
 //   - roles are read from the user's profile doc, never from the client payload
 //   - waiters cannot finalize/pay bills; only cashiers/admins can
-//   - paid bills are immutable
+//   - paid bills are immutable, except a reprint and a same-day cancellation
 //   - quantities/prices/totals must be non-negative and internally consistent
+//   - a bill becomes NON-CHARGEABLE only at settle, only with a valid reason,
+//     and never while rewriting its totals — a comp cannot hide its own cost
+
 //   - kitchen/cashier can only advance KOT status, nothing else
 //   - self-signup only creates PENDING waiter/kitchen profiles — and only with
 //     the restaurant's real join code; the cashier approves them. Exactly one
 //     cashier can ever self-claim per restaurant via meta/bootstrap.
 //   - pending/denied/restricted accounts can read nothing but their own profile
-//   - TRIAL EXPIRY: an account or workspace carrying `expiresAt` stops working
-//     once request.time passes it. NO `expiresAt` FIELD = NEVER EXPIRES, so
-//     every existing (permanent) account is completely unaffected by this
-//     ruleset. Clients can never write, change or clear the field.
+//   - TRIAL EXPIRY: every NEW restaurant is born as a 2-day trial, with its
+//     start stamped by the SERVER (trialStartedAt == request.time, satisfiable
+//     only by a serverTimestamp sentinel). The deadline is computed, not
+//     stored. An explicit `expiresAt` overrides it, and is Admin-SDK-only.
+//     NO TRIAL FIELDS = NEVER EXPIRES, so every existing (permanent) account
+//     is completely unaffected by this ruleset, and activating a paying
+//     customer is simply DELETING the fields. Clients can never write, change
+//     or clear either one.
 //
 // MULTI-TENANT: every app doc lives under restaurants/{restaurantId}, and every
 // role check reads the caller's profile under THAT restaurant — a member of
@@ -28,7 +35,7 @@ rules_version = '2';
 // getAfter, so neither can ever point somewhere the writer doesn't belong.
 //
 // A brand-new restaurant is born in ONE atomic owner-registration batch:
-//   restaurants/{rid}            root profile (name + joinCode)
+//   restaurants/{rid}            root profile (name + joinCode + trialStartedAt)
 //   restaurants/{rid}/meta/bootstrap   { cashierClaimed: true }
 //   restaurants/{rid}/users/{uid}      the owner's approved+active CASHIER
 //   restaurantCodes/{joinCode}         → { restaurantId }
@@ -94,10 +101,10 @@ service cloud.firestore {
       }
 
       // ---- trial expiry ----------------------------------------------------
-      // ABSENT FIELD = NEVER EXPIRES. This is the whole safety property: a
-      // permanent account has no `expiresAt`, so `!('expiresAt' in …)` is true
-      // and the `||` SHORT-CIRCUITS — the timestamp comparison is never even
-      // evaluated for a paying customer. The check is never written the other
+      // ABSENT FIELDS = NEVER EXPIRES. This is the whole safety property: a
+      // permanent restaurant carries neither `trialStartedAt` nor `expiresAt`,
+      // so every check below short-circuits to true and no timestamp
+      // comparison is even evaluated. The checks are never written the other
       // way round ("expiresAt must be in the future"), because that form locks
       // out every existing account the moment it deploys.
       //
@@ -105,9 +112,28 @@ service cloud.firestore {
       // Changing the device date, reinstalling, or clearing app storage cannot
       // move it.
       //
+      // TWO MECHANISMS, in precedence order:
+      //
+      //  1. `trialStartedAt` — SELF-SERVE trials. Stamped by the SERVER at
+      //     registration: the create rule below demands the field equal
+      //     request.time, which only a serverTimestamp() sentinel can satisfy.
+      //     A client cannot backdate it, cannot forge a longer window, and
+      //     cannot omit it. The deadline is COMPUTED (start + trialLength), so
+      //     there is no stored expiry for anyone to tamper with, and no
+      //     client-supplied timestamp means no clock-skew window to defend.
+      //
+      //  2. `expiresAt` — an explicit deadline that OVERRIDES the computed one.
+      //     Writable only through the Admin SDK (which bypasses rules), i.e.
+      //     scripts/seedTrial.js and the activation tooling. This is how a
+      //     custom trial length or a paid-through subscription date is set.
+      //
+      // Activation = DELETING both fields, which is why "no field" must always
+      // mean "permanent". Never replace this with an isPaid flag: absence
+      // cannot drift out of sync with reality, a boolean can.
+      //
       // Expiry is checked at BOTH levels and either one closes the account:
-      //   tenant  restaurants/{rid}.expiresAt   — the demo workspace as a whole
-      //   account users/{uid}.expiresAt         — the individual login
+      //   tenant  restaurants/{rid}   — the workspace as a whole
+      //   account users/{uid}         — the individual login
       // The tenant field is what makes this airtight: without it, anyone who
       // can create a user doc inside the trial (an admin, or a fresh join-code
       // signup) could mint a seat with no expiry and keep the workspace alive
@@ -116,9 +142,22 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/restaurants/$(restaurantId)).data;
       }
 
+      /** How long a self-serve trial runs. THE one place to change it — it is
+       *  applied to trialStartedAt at read time, so editing this and deploying
+       *  re-times every trial in flight (including ones already expired). */
+      function trialLength() {
+        return duration.value(2, 'd');
+      }
+
+      // Explicit expiresAt wins; else the computed trial deadline; else the
+      // tenant is permanent. Repeated restaurantDoc() calls resolve to ONE
+      // document read — Firestore caches identical get()s within a single rule
+      // evaluation.
       function tenantNotExpired() {
-        return !('expiresAt' in restaurantDoc())
-          || restaurantDoc().expiresAt > request.time;
+        return ('expiresAt' in restaurantDoc())
+          ? restaurantDoc().expiresAt > request.time
+          : (!('trialStartedAt' in restaurantDoc())
+             || restaurantDoc().trialStartedAt + trialLength() > request.time);
       }
 
       function selfNotExpired() {
@@ -130,22 +169,39 @@ service cloud.firestore {
         return tenantNotExpired() && selfNotExpired();
       }
 
-      // No client may add, change, or CLEAR an expiresAt on a doc it can edit.
+      // No client may add, change, or CLEAR a trial field on a doc it can edit.
       // Clearing is the dangerous one: without the first clause a trial admin
       // could strip the trial cashier's expiry, or a trial cashier could strip
-      // the waiter's and kitchen's, and keep a seat past the deadline. Only the
-      // seed script (Admin SDK, which bypasses rules entirely) sets this field.
-      // Written as two mutually exclusive shapes — "absent on both sides" or
-      // "present on both sides AND equal" — so the comparison is only reached
-      // when BOTH maps actually carry the key. Reading a missing field is an
-      // evaluation error in rules; it still denies, but a clean false is
+      // the waiter's and kitchen's, and keep a seat past the deadline. Worse,
+      // on the ROOT doc, clearing trialStartedAt IS activation — a cashier
+      // could hand themselves a permanent restaurant for free. Only the Admin
+      // SDK (which bypasses rules entirely) may write these fields.
+      //
+      // Each is written as two mutually exclusive shapes — "absent on both
+      // sides" or "present on both sides AND equal" — so the comparison is only
+      // reached when BOTH maps actually carry the key. Reading a missing field
+      // is an evaluation error in rules; it still denies, but a clean false is
       // easier to trust and keeps the audit logs readable.
-      function expiryUnchanged() {
+      function expiresAtUnchanged() {
         return (!('expiresAt' in resource.data)
                 && !('expiresAt' in request.resource.data))
           || (('expiresAt' in resource.data)
               && ('expiresAt' in request.resource.data)
               && request.resource.data.expiresAt == resource.data.expiresAt);
+      }
+
+      // Only ever present on the ROOT doc. On a users/{uid} write both sides
+      // lack it, so this is trivially true and costs nothing.
+      function trialStartedAtUnchanged() {
+        return (!('trialStartedAt' in resource.data)
+                && !('trialStartedAt' in request.resource.data))
+          || (('trialStartedAt' in resource.data)
+              && ('trialStartedAt' in request.resource.data)
+              && request.resource.data.trialStartedAt == resource.data.trialStartedAt);
+      }
+
+      function expiryUnchanged() {
+        return expiresAtUnchanged() && trialStartedAtUnchanged();
       }
 
       // An admin creating a staff account must pass its OWN expiry down: a
@@ -214,6 +270,81 @@ service cloud.firestore {
           && request.resource.data.name.size() <= 60;
       }
 
+      // ---- NON-CHARGEABLE ("NC") bills ------------------------------------
+      // A comped bill: nothing collected, and the client keeps it out of every
+      // sales figure. ABSENT/false = an ordinary chargeable bill, so a bill is
+      // only ever free because someone explicitly said so.
+      function isNc(data) {
+        return 'nonChargeable' in data && data.nonChargeable == true;
+      }
+
+      // NC may be applied ONLY on the settle write, and that write must
+      // PRESERVE what the comp was worth. Without the three equality checks a
+      // cashier could zero the totals on the way out and the owner's NC report
+      // would read Rs.0 — the comp would be free to give AND invisible.
+      //
+      // 'void' is allowed alongside 'paid' because a comped bill can still be
+      // CANCELLED (validVoidUpdate below) — and this function guards that write
+      // too, so the comp's recorded value survives the cancellation intact.
+      function validNcUpdate() {
+        return !isNc(request.resource.data)
+          || (
+            request.resource.data.status in ['paid', 'void']
+            && request.resource.data.paymentMode == null
+            && request.resource.data.ncReason in
+               ['owner', 'staff', 'complaint', 'pr', 'other']
+            && (
+              !('ncNote' in request.resource.data)
+              || (request.resource.data.ncNote is string
+                  && request.resource.data.ncNote.size() <= 140)
+            )
+            && request.resource.data.subtotal == resource.data.subtotal
+            && request.resource.data.gstTotal == resource.data.gstTotal
+            && request.resource.data.grandTotal == resource.data.grandTotal
+          );
+      }
+
+      // ---- CANCELLED ("VOID") bills ---------------------------------------
+      // The IST calendar date of a timestamp (+05:30). Firestore rules have no
+      // timezone support, so shift then take the date — this is the rules-side
+      // twin of dayKey() in src/lib/date.ts, and the two must agree.
+      function istDate(t) {
+        return (t + duration.value(330, 'm')).date();
+      }
+
+      // Cancelling a settled bill: 'paid' -> 'void', and NOTHING else may move.
+      //
+      // incomingDiffers() is what makes this safe: the void write cannot carry
+      // a changed grandTotal, gstTotal, paymentMode or nonChargeable alongside
+      // it, so a cancellation can never be used to rewrite what the sale was
+      // worth. Requiring the PRIOR status to be 'paid' makes void terminal —
+      // a bill cannot be cancelled twice, which is what stops the client from
+      // decrementing the day's summary more than once.
+      //
+      // voidedBy is pinned to the caller and voidedAt to request.time (only a
+      // serverTimestamp() sentinel satisfies that — the same trick that starts
+      // the trial clock), so neither the actor nor the moment can be forged.
+      //
+      // The same-day check is the load-bearing one: a day the owner has already
+      // read can never change underneath them.
+      function validVoidUpdate() {
+        return resource.data.status == 'paid'
+          && request.resource.data.status == 'void'
+          && incomingDiffers(
+               ['status', 'voidedAt', 'voidedBy', 'voidReason', 'voidNote'])
+          && request.resource.data.voidedBy == request.auth.uid
+          && request.resource.data.voidedAt == request.time
+          && request.resource.data.voidReason in
+             ['bad-food', 'wrong-order', 'customer-complaint',
+              'billing-error', 'other']
+          && (
+            !('voidNote' in request.resource.data)
+            || (request.resource.data.voidNote is string
+                && request.resource.data.voidNote.size() <= 140)
+          )
+          && istDate(resource.data.paidAt) == istDate(request.time);
+      }
+
       // The owner-registration batch, verified from the root-profile CREATE
       // (so request.resource here is the incoming root doc): the new profile
       // carries a well-formed joinCode, the matching restaurantCodes lookup
@@ -246,13 +377,25 @@ service cloud.firestore {
       // UPDATE stays admin/cashier-only and can never change the joinCode —
       // the restaurantCodes/{code} lookup is immutable, so the pair can't
       // drift apart.
-      // The tenant expiresAt is stamped ONLY by the seed script (Admin SDK).
-      // A self-registering owner can never mint one, and admin/cashier can
-      // never change or clear the one on a trial workspace.
+      //
+      // EVERY NEW RESTAURANT IS BORN AS A TRIAL. `trialStartedAt` is mandatory
+      // on create and must equal request.time, so the SERVER decides when the
+      // clock starts — the only way a client can satisfy this is by sending a
+      // serverTimestamp() sentinel. It cannot backdate the field, cannot skip
+      // it, and cannot supply a deadline of its own (`expiresAt` stays banned
+      // here — that override is Admin-SDK-only). Making the trial the DEFAULT,
+      // rather than something the app opts into, means no build of the client
+      // can register itself a permanent restaurant. Activation happens later,
+      // from the Admin SDK, by deleting these fields.
       allow get: if isMember();
       allow list: if false;
+      // The `in` check comes FIRST so an omitted stamp denies with a clean
+      // false rather than an evaluation error ("Property trialStartedAt is
+      // undefined on object"). Both deny; only one is readable in the audit log.
       allow create: if validProfileName()
         && !('expiresAt' in request.resource.data)
+        && ('trialStartedAt' in request.resource.data)
+        && request.resource.data.trialStartedAt == request.time
         && isOwnerRegistrationBatch();
       allow update: if hasAnyRole(['admin', 'cashier'])
         && validProfileName()
@@ -406,17 +549,21 @@ service cloud.firestore {
       // A waiter may only REQUEST a bill. Finalizing, taking payment, and
       // marking paid are cashier/admin only. Discounts do not exist: every
       // bill must carry discountPercent == 0 and discountAmount == 0. Paid
-      // bills are immutable. Totals must be internally consistent and
-      // non-negative.
+      // bills are immutable apart from a reprint and a same-day cancellation
+      // (validVoidUpdate()). Totals must be internally consistent and
+      // non-negative. A bill is never BORN non-chargeable — NC can only arrive
+      // on the settle write, under validNcUpdate().
       match /bills/{billId} {
         allow read: if isActiveStaff();
 
         // A waiter may only REQUEST a bill. Cashier/admin may also open it
-        // straight to 'finalized'. New bills are never created already paid.
+        // straight to 'finalized'. New bills are never created already paid,
+        // and never already comped.
         allow create: if request.resource.data.grandTotal is int
           && request.resource.data.grandTotal >= 0
           && request.resource.data.discountPercent == 0
           && request.resource.data.discountAmount == 0
+          && !isNc(request.resource.data)
           && request.resource.data.gstTotal ==
              request.resource.data.cgst + request.resource.data.sgst
           && (
@@ -426,11 +573,18 @@ service cloud.firestore {
           );
 
         // Only cashier/admin finalize and settle. Once paid or void the bill
-        // is frozen — EXCEPT a reprint may bump printedCount.
+        // is frozen — EXCEPT a reprint may bump printedCount, and a bill paid
+        // TODAY may be cancelled. validNcUpdate() applies to ALL branches: it
+        // is a no-op on an ordinary bill, and on a comped one it holds through
+        // reprints and cancellation too, so the recorded value of a comp cannot
+        // be rewritten under cover of either.
         allow update: if hasAnyRole(['admin', 'cashier'])
+          && validNcUpdate()
           && (
             // reprint: printedCount-only change, allowed in any status
             incomingDiffers(['printedCount'])
+            // cancel a settled bill: paid -> void, same IST business day
+            || validVoidUpdate()
             || (
               resource.data.status != 'paid'
               && resource.data.status != 'void'

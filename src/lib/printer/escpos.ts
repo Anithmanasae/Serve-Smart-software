@@ -24,6 +24,15 @@ export interface ReceiptInput {
   paperWidth: PaperWidth;
   /** Printed as "Payment : CASH". Omit the line by passing null (unpaid). */
   paymentLabel?: string | null;
+  /**
+   * NON-CHARGEABLE: print the comp banner and "Amount Payable Rs.0.00" in
+   * place of the payment line. Like `paymentLabel`, this is passed in rather
+   * than read off the bill so the cashier can print the receipt from the
+   * cashier's selection, before the settle write has marked the doc.
+   */
+  nonChargeable?: boolean;
+  /** Shown as "Reason : STAFF MEAL" under the NC banner. */
+  ncReasonLabel?: string | null;
 }
 
 export interface EncodedReceipt {
@@ -156,7 +165,16 @@ function pct(rate: number): string {
  * Bill doc (already computed by `computeBill` at bill time) — never recompute.
  */
 export function encodeReceipt(input: ReceiptInput): EncodedReceipt {
-  const { profile, bill, order, cashierName, paperWidth, paymentLabel } = input;
+  const {
+    profile,
+    bill,
+    order,
+    cashierName,
+    paperWidth,
+    paymentLabel,
+    nonChargeable,
+    ncReasonLabel,
+  } = input;
   const cols = lineWidth(paperWidth);
   const divider = "-".repeat(cols);
   const w = new ReceiptWriter(cols);
@@ -211,7 +229,26 @@ export function encodeReceipt(input: ReceiptInput): EncodedReceipt {
   w.raw(BOLD_OFF);
   w.line(divider);
 
-  if (paymentLabel) w.line(kv("Payment", toAscii(paymentLabel).toUpperCase()));
+  // A comped bill still prints its real Grand Total above — what was given
+  // away is the point of the record — then states plainly that none of it is
+  // owed, so the guest is never handed a figure they might try to pay.
+  if (nonChargeable) {
+    w.align("center");
+    w.raw(BOLD_ON);
+    w.line("*** NON-CHARGEABLE ***");
+    w.raw(BOLD_OFF);
+    w.align("left");
+    if (ncReasonLabel) {
+      w.line(kv("Reason", toAscii(ncReasonLabel).toUpperCase()));
+    }
+    w.raw(BOLD_ON);
+    w.line(spread("Amount Payable", paiseToRs(0), cols));
+    w.raw(BOLD_OFF);
+    w.line(divider);
+  } else if (paymentLabel) {
+    w.line(kv("Payment", toAscii(paymentLabel).toUpperCase()));
+  }
+
   w.align("center");
   w.line("Thank You!");
   w.line("Visit Again");

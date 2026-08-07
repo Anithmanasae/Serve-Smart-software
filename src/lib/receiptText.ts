@@ -17,6 +17,11 @@ export interface WhatsAppReceiptInput {
   order: Order;
   /** Shown as "Payment: CASH". Pass null to omit (unpaid bill). */
   paymentLabel?: string | null;
+  /** NON-CHARGEABLE: replaces the payment line with the comp banner and a
+   *  ₹0.00 payable. Passed in (not read off the bill) for the same reason
+   *  `paymentLabel` is — the cashier may send this before settling. */
+  nonChargeable?: boolean;
+  ncReasonLabel?: string | null;
 }
 
 function pct(rate: number): string {
@@ -25,7 +30,8 @@ function pct(rate: number): string {
 }
 
 export function formatWhatsAppReceipt(input: WhatsAppReceiptInput): string {
-  const { profile, bill, order, paymentLabel } = input;
+  const { profile, bill, order, paymentLabel, nonChargeable, ncReasonLabel } =
+    input;
   const createdAt = bill.createdAt ? bill.createdAt.toDate() : new Date();
   const lines = order.items.filter((i) => !i.voided && i.qty > 0);
 
@@ -53,7 +59,12 @@ export function formatWhatsAppReceipt(input: WhatsAppReceiptInput): string {
     out.push(`SGST (${pct(TAX_CONFIG.sgstRate)}): ${formatMoney(bill.sgst)}`);
   }
   out.push(`*Grand Total: ${formatMoney(bill.grandTotal)}*`);
-  if (paymentLabel) {
+  if (nonChargeable) {
+    out.push("");
+    out.push("*NON-CHARGEABLE*");
+    if (ncReasonLabel) out.push(`Reason: ${ncReasonLabel}`);
+    out.push(`*Amount Payable: ${formatMoney(0)}*`);
+  } else if (paymentLabel) {
     out.push("");
     out.push(`Payment: ${paymentLabel.toUpperCase()}`);
   }

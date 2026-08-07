@@ -9,6 +9,12 @@
  *     claimed), the owner's approved+active CASHIER profile, the
  *     restaurantCodes/{code} lookup, and userIndex/{uid}.
  *
+ *     EVERY new restaurant starts as a 2-day TRIAL: the root profile carries a
+ *     server-stamped `trialStartedAt` and the rules reject the batch without
+ *     it. Nothing here can opt out — a restaurant becomes permanent only when
+ *     the owner activates it later through the Admin SDK. Staff joining via
+ *     path B inherit the workspace's clock; they never get one of their own.
+ *
  *  B) joinRestaurant — staff with a join code. Resolves
  *     restaurantCodes/{code} → restaurantId, then one batch creates the
  *     pending+inactive waiter/kitchen profile (carrying the entered join code
@@ -24,6 +30,7 @@ import { getDoc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { getRandomBytes } from "expo-crypto";
 import { auth, db } from "@/lib/firebase";
 import { paths, setActiveRestaurantId } from "@/lib/firestore/paths";
+import { seedStarterData } from "@/features/auth/starterData";
 import type { AppUser, RestaurantProfile } from "@/types/models";
 
 /** Roles a person may pick when JOINING an existing restaurant. The cashier
@@ -105,6 +112,12 @@ export async function registerRestaurant(
         name: restaurantName.trim(),
         gstEnabled: true,
         joinCode,
+        // STARTS THE TRIAL CLOCK. The rules require this to equal request.time,
+        // so only the sentinel below can satisfy them — the server picks the
+        // value, not this device. Removing this line does not create a
+        // permanent restaurant; it makes registration fail outright.
+        trialStartedAt:
+          serverTimestamp() as unknown as RestaurantProfile["trialStartedAt"],
         updatedAt: serverTimestamp() as unknown as RestaurantProfile["updatedAt"],
       });
       batch.set(paths.bootstrap(), { cashierClaimed: true });
@@ -122,7 +135,6 @@ export async function registerRestaurant(
 
       try {
         await batch.commit();
-        return; // success — AuthContext picks up userIndex and proceeds
       } catch (e) {
         setActiveRestaurantId(null);
         lastError = e;
@@ -130,6 +142,13 @@ export async function registerRestaurant(
         if ((e as { code?: string })?.code === "permission-denied") continue;
         throw e;
       }
+
+      // The restaurant now EXISTS. Everything past this point is best-effort
+      // and must never fail the registration or trigger the retry above — a
+      // second pass would create a duplicate restaurant. seedStarterData
+      // swallows its own errors for exactly this reason.
+      await seedStarterData();
+      return; // success — AuthContext picks up userIndex and proceeds
     }
     throw lastError ?? new Error("Could not create the restaurant. Try again.");
   } catch (e) {

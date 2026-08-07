@@ -108,23 +108,37 @@ Routes through Expo's tunnel so any network works; scan the QR the same way.
 
 ---
 
-## 5. Hand a prospect a 2-day sandbox trial
+## 5. Free trials: one APK, everyone gets their own 2 days
 
-A trial runs in its **own tenant**, cloned from your live restaurant's menu and
-tables. The prospect never touches live data — their orders, bills, bill numbers
-and daily revenue all live under `restaurants/demo-trial/`.
+Send the same APK to as many people as you like. Each person taps **Start a
+free 2-day trial**, registers their own restaurant, and gets a private
+workspace with a starter menu and eight tables. Two days later it locks and
+shows them a **Contact us** screen. You do nothing per prospect.
 
-Enforcement is **server-side**, in `firestore.rules`, against `request.time`
-(Google's clock). Changing the device date or reinstalling does not extend it.
+### How the clock is set
 
-> **The safety property:** a trial carries an `expiresAt` field. **No field =
-> never expires.** Every real customer has no such field and is completely
-> unaffected. The check is never written as "expiresAt must be in the future" —
-> that form would lock out every existing account on deploy.
+`firestore.rules` requires the restaurant root doc to be created with
+`trialStartedAt == request.time`. Only a `serverTimestamp()` sentinel can
+satisfy that, so **the server picks the value** — a client cannot backdate it,
+cannot omit it, and cannot supply a deadline of its own. The deadline is then
+*computed* (`trialStartedAt + 2 days`), never stored, so there is nothing to
+tamper with. Changing the device date or reinstalling does nothing.
+
+> **The safety property:** **no trial fields = never expires.** A paying
+> customer's restaurant carries neither `trialStartedAt` nor `expiresAt` and is
+> completely unaffected by the expiry rules. Activation is the *deletion* of
+> those fields. Never add an `isPaid` flag — absence cannot drift out of sync
+> with reality, a boolean can.
+
+The clock is on the **restaurant**, not the person. Staff who join with the
+join code carry no expiry of their own — they lock and unlock with their
+workspace, and you never activate anyone individually.
 
 ### Before you deploy — prove it on the emulator
 
-Requires a JDK (`java -version`); the Firebase emulators won't start without one.
+Requires a JDK (`java -version`); the Firebase emulators won't start without
+one. Android Studio ships a usable one if you have no other:
+`JAVA_HOME="C:\Program Files\Android\Android Studio\jbr"`
 
 ```bash
 firebase emulators:start --only auth,firestore --project demo-sada-isolation
@@ -133,61 +147,81 @@ E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/trialExp
 E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/isolation.e2e.ts
 ```
 
-The expiry suite's first and last checkpoints are the ones that matter: a
-restaurant with no `expiresAt` works identically before and after.
+The expiry suite's last checkpoints are the ones that matter: an **activated**
+restaurant works identically to one that was never on a trial.
 
-### Deploy and seed
+### Deploy
 
 ```bash
-npm run trial:audit                      # BEFORE: live accounts show "no expiry"
+npm run trial:audit                      # BEFORE: existing tenants, status each
 firebase deploy --only firestore:rules   # shared with production — see below
 npm run trial:audit                      # AFTER: identical. Nothing moved.
-npm run trial:seed                       # clone menu + create the 3 logins
 ```
 
-`trial:seed` prints the three logins (cashier / waiter / kitchen), a shared
-password, the sandbox join code and the exact deadline. All three are
-pre-approved, so the prospect skips the join-code and approval flow entirely.
+Existing restaurants have no `trialStartedAt`, so they read as PERMANENT before
+and after. Only restaurants registered *after* this deploy start a clock.
 
-| Variable | Default | |
-|---|---|---|
-| `TRIAL_DAYS` | `2` | trial length |
-| `TRIAL_RESTAURANT_ID` | `demo-trial` | must start with `demo-` |
-| `LIVE_RESTAURANT_ID` | `sada-main` | cloned **from**, never written to |
-| `DEMO_PASSWORD` | `Demo@1234` | shared by all three logins |
-
-### Between prospects
-
-```bash
-npm run trial:reset   # wipes orders/KOTs/bills/counters + the 3 logins
-npm run trial:seed    # fresh logins, clock restarts
-```
-
-`trial:reset` **keeps** the cloned menu and tables, and targets accounts by
-membership of the trial tenant — it never enumerates all users.
-
-> `scripts/resetUsers.js` is the old single-tenant script and deletes **every
-> login in the project**. It now refuses to run without an explicit opt-in. Use
-> `trial:reset` for sandboxes.
-
-### The demo APK
-
-The tenant is resolved at runtime, so the prospect can use your normal build.
-Build the `demo` profile only if you want self-signup hidden:
+### Build the APK
 
 ```bash
 eas build --profile demo --platform android
 ```
 
-That sets `EXPO_PUBLIC_DEMO_MODE=true`, which hides the "Create an account" link
-and shows a **DEMO BUILD** chip on the login screen — that chip is how you
-verify the flag actually reached the bundle, and how you'd spot it if it ever
-shipped to production by mistake.
+Set `EXPO_PUBLIC_CONTACT_PHONE` (digits only, country code, no `+`) and
+`EXPO_PUBLIC_CONTACT_NAME` first, or the expiry screen will have no Contact
+button. The `demo` profile also sets `EXPO_PUBLIC_DEMO_MODE=true`, which now
+only shows a **TEST BUILD** chip with the Firebase project id on the login
+screen — a diagnostic so you can see which backend an APK talks to. It changes
+no behaviour; trials are enforced server-side for every build.
 
-> Hiding signup is UX, not enforcement: signup is a legitimately open flow and
-> the rules cannot tell a prospect from a real new customer. What stops a trial
-> running long is `expiresAt` on the **workspace** — so even a fresh join-code
-> signup inside the sandbox is expired too.
+### Day to day
+
+```bash
+npm run trial:audit                # every tenant, most urgent first
+npm run trial:audit -- --expiring  # ends within 24h — your chase list
+```
+
+When someone pays, ask for **the email they signed up with**, then:
+
+```bash
+node scripts/activateTenant.js owner@theirplace.com            # check the match
+node scripts/activateTenant.js owner@theirplace.com --confirm  # activate
+```
+
+Their app unblocks on the next snapshot — no reinstall, and every staff device
+in that restaurant unblocks at the same time. If someone was sitting *inside*
+the app when it locked, have them close and reopen it (Firestore drops a
+listener permanently when it hits permission-denied).
+
+Selling a subscription rather than a one-off? Set a paid-through date instead,
+and push it out on each renewal:
+
+```bash
+node scripts/activateTenant.js owner@theirplace.com --until 2026-12-31 --confirm
+```
+
+### When the wrong person registered
+
+Whoever taps "New restaurant" becomes its cashier, permanently — the seat can
+never be re-claimed, and a cashier cannot promote anyone to cashier. Have the
+right person join with the join code first, then:
+
+```bash
+node scripts/reassignCashier.js --to owner@theirplace.com --from manager@theirplace.com --confirm
+```
+
+> Tell prospects up front: *register with the account that should own this.*
+> One sentence in your demo message avoids most of these.
+
+### Legacy: the shared demo sandbox
+
+`npm run trial:seed` / `trial:reset` predate self-serve trials. They seed ONE
+shared `demo-trial` tenant with three fixed logins and stamp `expiresAt`
+directly. Still functional (it rides the override path) but superseded — a
+prospect should just register their own restaurant from the app.
+
+> `scripts/resetUsers.js` is the old single-tenant script and deletes **every
+> login in the project**. It refuses to run without an explicit opt-in.
 
 ### What's shared with production
 
@@ -200,8 +234,23 @@ Data stays isolated; the policy does not. Rollback:
 git checkout HEAD~1 -- firestore.rules && firebase deploy --only firestore:rules
 ```
 
-The app-side changes (`AuthContext`, `pending.tsx`, `login.tsx`, `models.ts`)
-ship in your next build and are inert for any account without `expiresAt`.
+The app-side changes (`AuthContext`, `pending.tsx`, `login.tsx`, `signup.tsx`,
+`models.ts`, `starterData.ts`, `TrialStatusCard`) ship in your next build and
+are inert for any restaurant with no trial fields.
+
+> **Deploy the rules and distribute the new APK together.** They are a matched
+> pair, and each half alone misbehaves in a different direction:
+>
+> - **Old APK + new rules** → new-restaurant signup is **denied**. The old
+>   build sends no `trialStartedAt`, and the new create rule requires it.
+>   (Proven — see the "NO trialStartedAt at all" checkpoint in
+>   `trialExpiry.e2e.ts`.) Anyone already signed in is unaffected; only new
+>   registrations break. If you have already handed out an older APK, expect
+>   those copies to stop being able to register once you deploy.
+> - **New APK + old rules** → signup *succeeds*, silently, with **no trial**.
+>   The old ruleset has no `hasOnly` on that create, so the extra field is
+>   accepted and then ignored, and every restaurant registered in that window
+>   is permanent and free forever.
 
 ---
 

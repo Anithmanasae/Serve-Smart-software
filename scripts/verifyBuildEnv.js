@@ -1,6 +1,6 @@
 /**
- * PRE-BUILD CHECK — does EAS actually agree with .env.local about which
- * Firebase project this app talks to?
+ * PRE-BUILD CHECK — is each EAS environment pointed at the Firebase project it
+ * is supposed to be pointed at?
  *
  * WHY THIS EXISTS
  * `.env.local` is gitignored, so it never reaches an EAS build. A build takes
@@ -10,28 +10,33 @@
  * login with "invalid email or password", because it is asking a completely
  * different Firebase project.
  *
- * That is exactly what happened once here: the EAS preview AND production
- * environments still pointed at a different project inherited from another app,
- * so the demo APK talked to the wrong backend.
+ * That is exactly what happened once here: the EAS preview environment still
+ * pointed at a different project inherited from another app, so the demo APK
+ * talked to the wrong backend.
  *
- * Run this BEFORE `eas build` and it fails loudly instead.
+ * The expected project for each environment comes from scripts/buildTargets.js
+ * — NOT from .env.local. This repo ships more than one white-labelled product
+ * from one EAS project, so "everything must equal my local dev config" is the
+ * wrong rule: `preview` legitimately targets a different customer's backend,
+ * and blindly "fixing" it would break their builds.
+ *
+ * THIS IS THE OPTIONAL, MANUAL FORM OF THE CHECK. The same comparison runs
+ * automatically inside every EAS build (scripts/assertBuildTarget.js), so a
+ * wrong-backend APK cannot be produced even if nobody runs this. Use this when
+ * you want to see the state of things BEFORE burning a build.
  *
  * Usage:
  *   npm run verify:env                 # checks preview + production
- *   npm run verify:env -- preview      # just one environment
+ *   npm run verify:env -- production   # just one environment
  */
 const { execSync } = require("child_process");
 const { existsSync, readFileSync } = require("fs");
 const path = require("path");
-
-const KEYS = [
-  "EXPO_PUBLIC_FIREBASE_API_KEY",
-  "EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN",
-  "EXPO_PUBLIC_FIREBASE_PROJECT_ID",
-  "EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET",
-  "EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID",
-  "EXPO_PUBLIC_FIREBASE_APP_ID",
-];
+const {
+  BUILD_TARGETS,
+  REQUIRED_KEYS,
+  checkFirebaseEnv,
+} = require("./buildTargets");
 
 function parseEnvFile(file) {
   const out = {};
@@ -78,38 +83,53 @@ function easEnv(environment) {
 }
 
 function check(environment, local) {
-  const remote = easEnv(environment);
-  const problems = [];
-  for (const key of KEYS) {
-    const want = local[key];
-    const got = remote[key];
-    if (!want) continue; // nothing to compare against
-    if (got === undefined) problems.push(`${key}: MISSING on EAS`);
-    else if (got !== want) problems.push(`${key}:\n      EAS   ${got}\n      local ${want}`);
-  }
   const label = `EAS "${environment}"`;
-  if (problems.length === 0) {
-    console.log(`  OK   ${label} matches .env.local (${remote.EXPO_PUBLIC_FIREBASE_PROJECT_ID})`);
+
+  if (!(environment in BUILD_TARGETS)) {
+    console.log(
+      `  SKIP ${label} — no expected project in scripts/buildTargets.js`,
+    );
     return true;
   }
-  console.log(`  FAIL ${label} disagrees with .env.local:`);
+  const expected = BUILD_TARGETS[environment];
+  const remote = easEnv(environment);
+  const problems = checkFirebaseEnv(remote, expected);
+
+  // Only when an environment targets the SAME project as this machine's
+  // .env.local can we compare key by key — that catches a stale API key or app
+  // id within an otherwise correct project. For another product's backend we
+  // have no local copy to compare against, and must not invent one.
+  if (expected && expected === local.EXPO_PUBLIC_FIREBASE_PROJECT_ID) {
+    for (const key of REQUIRED_KEYS) {
+      const want = local[key];
+      const got = remote[key];
+      if (!want || got === undefined || got === want) continue;
+      problems.push(`${key}:\n      EAS   ${got}\n      local ${want}`);
+    }
+  }
+
+  if (problems.length === 0) {
+    const target = expected ?? remote.EXPO_PUBLIC_FIREBASE_PROJECT_ID;
+    console.log(`  OK   ${label} -> ${target}`);
+    return true;
+  }
+  console.log(`  FAIL ${label} (expected ${expected}):`);
   for (const p of problems) console.log(`    - ${p}`);
   return false;
 }
 
 const local = parseEnvFile(path.join(process.cwd(), ".env.local"));
-if (!local.EXPO_PUBLIC_FIREBASE_PROJECT_ID) {
-  console.error("\n.env.local has no EXPO_PUBLIC_FIREBASE_PROJECT_ID — nothing to verify against.\n");
-  process.exit(1);
-}
 
 const environments = process.argv.slice(2).length
   ? process.argv.slice(2)
   : ["preview", "production"];
 
 console.log(
-  `\nVerifying EAS build config against .env.local ` +
-    `(${local.EXPO_PUBLIC_FIREBASE_PROJECT_ID})\n`,
+  `\nVerifying EAS environments against scripts/buildTargets.js` +
+    (local.EXPO_PUBLIC_FIREBASE_PROJECT_ID
+      ? ` (local .env.local: ${local.EXPO_PUBLIC_FIREBASE_PROJECT_ID})`
+      : ""),
+  "\n",
 );
 
 let ok = true;
@@ -119,9 +139,11 @@ if (!ok) {
   console.error(
     `\nA build from a mismatched environment will install and run, then reject\n` +
       `valid logins because it is talking to a different Firebase project.\n\n` +
-      `Fix with:\n` +
-      `  eas env:update --variable-name <NAME> --variable-environment <ENV> --value <VALUE>\n`,
+      `Fix the environment:\n` +
+      `  eas env:update --variable-name <NAME> --variable-environment <ENV> --value <VALUE>\n\n` +
+      `...or, if the environment is SUPPOSED to target that project, update the\n` +
+      `table in scripts/buildTargets.js.\n`,
   );
   process.exit(1);
 }
-console.log(`\nAll checked environments agree. Safe to build.\n`);
+console.log(`\nAll checked environments match their expected backend.\n`);
