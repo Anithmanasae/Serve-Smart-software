@@ -46,11 +46,22 @@ const ROWS = 3;
 const GAP = space.s3;
 
 /**
- * The shortest a ticket may be drawn: header, elapsed time, MAX_ITEM_LINES of
- * items and the COMPLETE button. Below this the card body starts clipping
- * items, and on a kitchen board a clipped ticket is worse than fewer tickets.
+ * The shortest a ticket may be drawn, from TableTicketCard's own box model:
+ *
+ *   96  fixed chrome (borders 2, body padding 16, header 18, elapsed ~14,
+ *       items margin 8, COMPLETE button 38)
+ * + 70  items at their worst — MAX_ITEM_LINES rows at lineHeight 15, the
+ *       "+N more…" row a 4-item ticket adds, and the gaps between them
+ * ─────
+ *   166
+ *
+ * Rounded up for headroom, because the two "~" figures above are RN's default
+ * line heights rather than measured ones. `items` is `overflow: hidden`, so
+ * coming up short doesn't shrink the card — it silently eats the "+N more…"
+ * line, which is exactly the cue telling the cook to tap for the rest of the
+ * ticket. Losing that is worse than showing one row fewer.
  */
-const MIN_CARD_H = 160;
+const MIN_CARD_H = 170;
 
 /**
  * How many rows of whole cards a board of `gridH` can hold.
