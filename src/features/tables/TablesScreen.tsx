@@ -24,7 +24,8 @@ import { router } from "expo-router";
 import { paths } from "@/lib/firestore/paths";
 import { useCollectionData } from "@/lib/firestore/useRealtime";
 import { formatMoney } from "@/lib/money";
-import { tapFeedback } from "@/lib/feedback";
+import { gridColumns, useResponsive } from "@/lib/responsive";
+import { feel } from "@/lib/feedback";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import type { Kot, Order, OrderItem, Table, TableStatus } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -38,6 +39,9 @@ import {
 } from "./tablesApi";
 
 type FilterKey = "all" | TableStatus;
+
+/** Id prefix for the invisible cells that square off the last grid row. */
+const TABLE_SPACER = "__spacer__";
 type Sheet = "actions" | "merge" | "shift" | "split" | null;
 
 const FILTERS: { key: FilterKey; label: string }[] = [
@@ -58,6 +62,10 @@ export function TablesScreen() {
   // Counter flow entry point: cashier/admin start a takeaway order (no table)
   // straight from the floor — items → KOT → bill, all on the order screen.
   const canTakeaway = profile?.role === "cashier" || profile?.role === "admin";
+
+  // Re-reads on rotation, so the floor re-flows instead of staying in the
+  // column count it was first laid out with.
+  const { width } = useResponsive();
 
   // ── Live subscriptions ────────────────────────────────────────────────────
   const tablesQuery = useMemo(() => paths.tables(), []);
@@ -112,6 +120,22 @@ export function TablesScreen() {
     return sorted.filter((t) => t.status === filter);
   }, [tables, filter]);
 
+  // The floor is the one screen a tablet earns its size on: two stretched
+  // cards per row on a 10" screen is a list pretending to be a floor plan.
+  // Cards keep a phone-ish width and the row count follows the glass.
+  const columns = gridColumns(width, 200, 8);
+
+  // Pad the last row so a lone trailing card doesn't stretch to fill it.
+  const gridData: (Table | { id: string })[] = useMemo(() => {
+    const remainder = visibleTables.length % columns;
+    if (remainder === 0) return visibleTables;
+    const padded: (Table | { id: string })[] = [...visibleTables];
+    for (let i = remainder; i < columns; i += 1) {
+      padded.push({ id: `${TABLE_SPACER}${i}` });
+    }
+    return padded;
+  }, [visibleTables, columns]);
+
   // ── Action sheet state ─────────────────────────────────────────────────────
   const [sheet, setSheet] = useState<Sheet>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -133,17 +157,22 @@ export function TablesScreen() {
   );
 
   function closeSheet() {
+    feel.dismiss();
     setSheet(null);
     setSelectedId(null);
   }
 
+  // Every table action (merge, transfer, free, clear) funnels through here, so
+  // this is the one place that has to answer the press with what happened.
   async function run(fn: () => Promise<unknown>, onDone?: () => void) {
     if (busy) return;
     setBusy(true);
     try {
       await fn();
+      feel.success();
       onDone?.();
     } catch (e) {
+      feel.error();
       Alert.alert("Action failed", e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
@@ -174,7 +203,7 @@ export function TablesScreen() {
           <Pressable
             style={({ pressed }) => [styles.takeawayBtn, pressed && styles.pressed]}
             onPress={() => {
-              tapFeedback();
+              feel.press(); // leaving for another screen
               router.push("/order");
             }}
           >
@@ -190,7 +219,7 @@ export function TablesScreen() {
             <Pressable
               key={f.key}
               onPress={() => {
-                tapFeedback();
+                if (!active) feel.select(); // a filter tick, not a button
                 setFilter(f.key);
               }}
               style={({ pressed }) => [
@@ -210,9 +239,12 @@ export function TablesScreen() {
       </View>
 
       <FlatList
-        data={visibleTables}
+        // RN cannot change `numColumns` on a live list — remounting on the
+        // count is what lets the floor re-flow across a rotation.
+        key={`floor-${columns}`}
+        data={gridData}
         keyExtractor={(t) => t.id}
-        numColumns={2}
+        numColumns={columns}
         columnWrapperStyle={styles.column}
         contentContainerStyle={[
           styles.grid,
@@ -223,16 +255,22 @@ export function TablesScreen() {
             {loading ? "Loading floor…" : "No tables to show."}
           </Text>
         }
-        renderItem={({ item }) => (
-          <TableCard
-            table={item}
-            order={orderByTable.get(item.id) ?? null}
-            primary={
-              item.mergedInto ? tableById.get(item.mergedInto) ?? null : null
-            }
-            onPress={handleCardPress}
-          />
-        )}
+        renderItem={({ item }) => {
+          if (item.id.startsWith(TABLE_SPACER)) {
+            return <View style={styles.spacerCell} />;
+          }
+          const table = item as Table;
+          return (
+            <TableCard
+              table={table}
+              order={orderByTable.get(table.id) ?? null}
+              primary={
+                table.mergedInto ? tableById.get(table.mergedInto) ?? null : null
+              }
+              onPress={handleCardPress}
+            />
+          );
+        }}
       />
 
       {/* Action sheet modal */}
@@ -697,6 +735,8 @@ const styles = StyleSheet.create({
 
   grid: { paddingHorizontal: space.s4 },
   column: { gap: space.s3, marginBottom: space.s3 },
+  // Holds a cell open in the last row so the final card keeps its width.
+  spacerCell: { flex: 1 },
   empty: {
     textAlign: "center",
     fontFamily: fonts.regular,

@@ -13,6 +13,7 @@ import { Redirect, router } from "expo-router";
 import { useAuth, type SignupRole } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
+import { feel } from "@/lib/feedback";
 import { colors, space, radius } from "@/theme/theme";
 
 type Mode = "create" | "join";
@@ -52,22 +53,27 @@ export default function Signup() {
 
   async function onSubmit() {
     if (mode === "create" && !restaurantName.trim()) {
+      feel.error();
       setError("Enter your restaurant's name.");
       return;
     }
     if (mode === "join" && !joinCode.trim()) {
+      feel.error();
       setError("Enter the restaurant's join code.");
       return;
     }
     if (!name.trim()) {
+      feel.error();
       setError("Enter your name.");
       return;
     }
     if (!email.trim() || !password) {
+      feel.error();
       setError("Enter your email and a password.");
       return;
     }
     if (password !== confirm) {
+      feel.error();
       setError("Passwords don't match.");
       return;
     }
@@ -89,6 +95,7 @@ export default function Signup() {
         router.replace("/pending");
       }
     } catch (e) {
+      feel.error();
       setError(friendlyAuthError(e));
       setBusy(false);
     }
@@ -131,7 +138,10 @@ export default function Signup() {
           <View style={styles.modeRow}>
             <Pressable
               style={[styles.modeTab, mode === "join" && styles.modeTabOn]}
-              onPress={() => setMode("join")}
+              onPress={() => {
+                if (mode !== "join") feel.select();
+                setMode("join");
+              }}
               disabled={busy}
             >
               <Text
@@ -142,7 +152,10 @@ export default function Signup() {
             </Pressable>
             <Pressable
               style={[styles.modeTab, mode === "create" && styles.modeTabOn]}
-              onPress={() => setMode("create")}
+              onPress={() => {
+                if (mode !== "create") feel.select();
+                setMode("create");
+              }}
               disabled={busy}
             >
               <Text
@@ -185,7 +198,10 @@ export default function Signup() {
                   <Pressable
                     key={r.value}
                     style={[styles.roleChip, role === r.value && styles.roleChipOn]}
-                    onPress={() => setRole(r.value)}
+                    onPress={() => {
+                      if (role !== r.value) feel.select();
+                      setRole(r.value);
+                    }}
                     disabled={busy}
                   >
                     <Text
@@ -249,6 +265,7 @@ export default function Signup() {
               pressed && styles.buttonPressed,
             ]}
             onPress={onSubmit}
+            onPressIn={feel.press}
             disabled={busy}
           >
             <Text style={styles.buttonText}>
@@ -265,6 +282,7 @@ export default function Signup() {
           <Pressable
             style={({ pressed }) => [styles.backLink, pressed && { opacity: 0.6 }]}
             onPress={() => router.back()}
+            onPressIn={feel.dismiss}
             disabled={busy}
           >
             <Text style={styles.backText}>

@@ -1,28 +1,42 @@
 /**
- * Bluetooth thermal-printer service (Android, Bluetooth Classic / SPP).
+ * Thermal-printer service — the only printer API screens should import.
  *
- * The native module only exists in an EAS/dev-client build — Expo Go has no
- * Bluetooth. Everything here therefore loads `react-native-bluetooth-classic`
- * LAZILY and only after confirming `NativeModules.RNBluetoothClassic` exists
- * (the library wires itself to that native module at import time, so a bare
- * import inside Expo Go could throw). When unavailable, callers get
+ * Two transports sit behind it, both Android-only and both native-build-only:
+ *  - `bluetoothTransport` — Bluetooth Classic / SPP, printer paired in Android
+ *    settings.
+ *  - `usbTransport` — a USB-C (OTG) cable straight into the printer.
+ *
+ * Neither exists in Expo Go, so every entry point degrades to
  * `isPrintingAvailable() === false` and a friendly error — never a crash.
  *
- * Device choice + paper width persist in AsyncStorage (per device, like the
- * other local settings) so the cashier pairs once and just prints.
+ * Device choice (including which transport) and paper width persist in
+ * AsyncStorage per device, like the other local settings, so the cashier sets
+ * up once and just prints.
  */
-import { NativeModules, PermissionsAndroid, Platform } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Buffer } from "buffer";
-import type BluetoothModule from "react-native-bluetooth-classic/lib/BluetoothModule";
 import type { PaperWidth } from "./escpos";
+import {
+  disconnectBluetooth,
+  isBluetoothPrintingAvailable,
+  listBluetoothPrinters,
+  printOverBluetooth,
+} from "./bluetoothTransport";
+import {
+  ensureUsbPermission,
+  isUsbPrintingAvailable,
+  listUsbPrinters,
+  printOverUsb,
+} from "./usbTransport";
 
-const DEVICE_KEY = "sada.printer.device"; // JSON {address, name}
+const DEVICE_KEY = "sada.printer.device"; // JSON PrinterDevice
 const PAPER_KEY = "sada.printer.paperWidth"; // "58" | "80"
 
-const CONNECT_TIMEOUT_MS = 12000;
+/** How the bytes reach the printer. */
+export type PrinterTransport = "bluetooth" | "usb";
 
 export interface PrinterDevice {
+  transport: PrinterTransport;
+  /** Bluetooth: MAC address. USB: "vvvv:pppp" (vendor:product, hex). */
   address: string;
   name: string;
 }
@@ -31,72 +45,42 @@ export interface PrinterDevice {
 export const PRINTING_UNAVAILABLE_MESSAGE =
   "Printing requires the installed app.";
 
-/** True only in a native build that compiled the Bluetooth module in. */
+/** Transports this build + this hardware can actually use, in offer order. */
+export function availableTransports(): PrinterTransport[] {
+  const transports: PrinterTransport[] = [];
+  if (isBluetoothPrintingAvailable()) transports.push("bluetooth");
+  if (isUsbPrintingAvailable()) transports.push("usb");
+  return transports;
+}
+
+/** True when at least one transport is usable. */
 export function isPrintingAvailable(): boolean {
-  return (
-    Platform.OS === "android" && NativeModules.RNBluetoothClassic != null
-  );
+  return availableTransports().length > 0;
 }
 
-let cachedModule: BluetoothModule | null = null;
-
-function getModule(): BluetoothModule {
-  if (!isPrintingAvailable()) {
-    throw new Error(PRINTING_UNAVAILABLE_MESSAGE);
-  }
-  if (!cachedModule) {
-    // Lazy so Expo Go never evaluates the library's native wiring.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    cachedModule = require("react-native-bluetooth-classic")
-      .default as BluetoothModule;
-  }
-  return cachedModule;
+/** "Bluetooth" / "USB-C" — for buttons and error copy. */
+export function transportLabel(transport: PrinterTransport): string {
+  return transport === "usb" ? "USB-C" : "Bluetooth";
 }
 
-/**
- * Runtime permissions before touching the adapter.
- * Android 12+ (API 31): BLUETOOTH_CONNECT + BLUETOOTH_SCAN.
- * Android ≤ 11: legacy ACCESS_FINE_LOCATION gates Bluetooth listing.
- */
-export async function ensureBluetoothPermissions(): Promise<void> {
-  if (Platform.OS !== "android") return;
-  const api = Number(Platform.Version);
-  if (api >= 31) {
-    const result = await PermissionsAndroid.requestMultiple([
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-    ]);
-    const denied = Object.values(result).some(
-      (r) => r !== PermissionsAndroid.RESULTS.GRANTED
-    );
-    if (denied) {
-      throw new Error(
-        "Bluetooth permission was denied. Allow Nearby devices in Settings."
-      );
-    }
-  } else {
-    const result = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION
-    );
-    if (result !== PermissionsAndroid.RESULTS.GRANTED) {
-      throw new Error(
-        "Location permission was denied — Android needs it to list Bluetooth devices."
-      );
-    }
+/** Paired (Bluetooth) or connected (USB) printers for one transport. */
+export async function listPrinters(
+  transport: PrinterTransport
+): Promise<PrinterDevice[]> {
+  if (transport === "usb") {
+    const devices = await listUsbPrinters();
+    return devices.map((d) => ({
+      transport: "usb" as const,
+      address: d.address,
+      name: d.name,
+    }));
   }
-}
-
-/** Paired (bonded) classic devices — the printer must be paired in Android
- *  Bluetooth settings first; we deliberately don't run discovery. */
-export async function listPairedDevices(): Promise<PrinterDevice[]> {
-  await ensureBluetoothPermissions();
-  const mod = getModule();
-  const enabled = await mod.isBluetoothEnabled();
-  if (!enabled) {
-    throw new Error("Bluetooth is off. Turn it on and try again.");
-  }
-  const devices = await mod.getBondedDevices();
-  return devices.map((d) => ({ address: d.address, name: d.name }));
+  const devices = await listBluetoothPrinters();
+  return devices.map((d) => ({
+    transport: "bluetooth" as const,
+    address: d.address,
+    name: d.name,
+  }));
 }
 
 // ── persisted selection ─────────────────────────────────────────────────────
@@ -105,7 +89,14 @@ export async function getSavedPrinter(): Promise<PrinterDevice | null> {
   const raw = await AsyncStorage.getItem(DEVICE_KEY);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as PrinterDevice;
+    const parsed = JSON.parse(raw) as Partial<PrinterDevice>;
+    if (!parsed.address || !parsed.name) return null;
+    return {
+      // Saved before USB existed → it was a Bluetooth printer.
+      transport: parsed.transport === "usb" ? "usb" : "bluetooth",
+      address: parsed.address,
+      name: parsed.name,
+    };
   } catch {
     return null;
   }
@@ -126,51 +117,27 @@ export async function setPaperWidth(width: PaperWidth): Promise<void> {
 
 // ── printing ────────────────────────────────────────────────────────────────
 
-function withTimeout<T>(p: Promise<T>, label: string): Promise<T> {
-  return Promise.race([
-    p,
-    new Promise<T>((_, reject) =>
-      setTimeout(
-        () => reject(new Error(`${label} timed out. Is the printer on?`)),
-        CONNECT_TIMEOUT_MS
-      )
-    ),
-  ]);
+/**
+ * Ask for whatever the transport needs up front — the USB permission dialog —
+ * so the cashier meets it while setting up, not mid-service with a queue
+ * waiting. Bluetooth pairs in Android settings, so there is nothing to do.
+ */
+export async function preparePrinter(device: PrinterDevice): Promise<void> {
+  if (device.transport === "usb") {
+    await ensureUsbPermission(device.address, device.name);
+  }
 }
 
-/** Connect (reusing an open socket when possible) and send raw ESC/POS bytes. */
+/** Send raw ESC/POS bytes over whichever transport the device uses. */
 export async function printToDevice(
   device: PrinterDevice,
   bytes: Uint8Array
 ): Promise<void> {
-  await ensureBluetoothPermissions();
-  const mod = getModule();
-
-  const enabled = await mod.isBluetoothEnabled();
-  if (!enabled) {
-    throw new Error("Bluetooth is off. Turn it on and try again.");
+  if (device.transport === "usb") {
+    await printOverUsb(device.address, device.name, bytes);
+    return;
   }
-
-  const connected = await mod.isDeviceConnected(device.address).catch(() => false);
-  if (!connected) {
-    try {
-      await withTimeout(
-        mod.connectToDevice(device.address),
-        `Connecting to ${device.name}`
-      );
-    } catch (e) {
-      throw new Error(
-        `Couldn't connect to ${device.name}. Make sure the printer is on and in range.` +
-          (e instanceof Error && e.message ? ` (${e.message})` : "")
-      );
-    }
-  }
-
-  const ok = await withTimeout(
-    mod.writeToDevice(device.address, Buffer.from(bytes)),
-    "Printing"
-  );
-  if (!ok) throw new Error(`Sending data to ${device.name} failed.`);
+  await printOverBluetooth(device.address, device.name, bytes);
 }
 
 /** Print to the SAVED printer; throws a friendly error when none is set. */
@@ -185,11 +152,12 @@ export async function printToSavedPrinter(bytes: Uint8Array): Promise<PrinterDev
   return device;
 }
 
-/** Best-effort socket close (e.g. when switching printers). */
+/**
+ * Best-effort release (e.g. when switching printers). USB claims the interface
+ * only for the length of a write, so there is nothing to release there.
+ */
 export async function disconnectPrinter(device: PrinterDevice): Promise<void> {
-  try {
-    await getModule().disconnectFromDevice(device.address);
-  } catch {
-    // Already disconnected / unavailable — nothing to clean up.
+  if (device.transport === "bluetooth") {
+    await disconnectBluetooth(device.address);
   }
 }

@@ -7,10 +7,11 @@
  *   ADDITIONAL (orange) — tables with a 2nd+ active ticket (a later round)
  *   COMPLETED (green) — today's completed tickets, newest first
  *
- * Cards are one per table (see groupKots) in a high-density 3-column grid
- * sized so exactly 3 rows fit the screen; the list scrolls to reveal more
- * tables. Each card shows its 1-based FIFO queue position. Fully real-time
- * via the ported hooks; writes only through kdsApi.
+ * Cards are one per table (see groupKots) in a high-density grid sized so a
+ * whole number of rows fits the screen — 3×3 on a phone, wider and deeper on
+ * a tablet (see `boardRows`); the list scrolls to reveal more tables. Each
+ * card shows its 1-based FIFO queue position. Fully real-time via the ported
+ * hooks; writes only through kdsApi.
  */
 import { useMemo, useState } from "react";
 import {
@@ -26,6 +27,8 @@ import { orderBy, query, Timestamp, where } from "firebase/firestore";
 import { paths } from "@/lib/firestore/paths";
 import { useCollectionData } from "@/lib/firestore/useRealtime";
 import { startOfDayIST } from "@/lib/date";
+import { feel } from "@/lib/feedback";
+import { useResponsive } from "@/lib/responsive";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
 import type { Kot } from "@/types/models";
@@ -42,6 +45,29 @@ const COLS = 3;
 const ROWS = 3;
 const GAP = space.s3;
 
+/**
+ * The shortest a ticket may be drawn: header, elapsed time, MAX_ITEM_LINES of
+ * items and the COMPLETE button. Below this the card body starts clipping
+ * items, and on a kitchen board a clipped ticket is worse than fewer tickets.
+ */
+const MIN_CARD_H = 160;
+
+/**
+ * How many rows of whole cards a board of `gridH` can hold.
+ *
+ * The phone keeps its fixed 3×3 — that density is the screen's whole design.
+ * A tablet instead takes the TALLEST board whose cards still clear
+ * `MIN_CARD_H`, because a KDS is a queue: seeing one more ticket is worth
+ * more than seeing the same ticket bigger, right up until it stops being
+ * readable. The board still shows whole cards and never a sliced row.
+ */
+function boardRows(gridH: number): number {
+  for (let rows = 6; rows > 2; rows -= 1) {
+    if (Math.floor((gridH - rows * GAP) / rows) >= MIN_CARD_H) return rows;
+  }
+  return ROWS;
+}
+
 type Tab = "orders" | "takeaway" | "additional" | "completed";
 
 type GridEntry = TableGroup | { key: string; spacer: true };
@@ -55,6 +81,7 @@ const EMPTY_COPY: Record<Tab, string> = {
 
 export function KitchenDisplayScreen() {
   const insets = useSafeAreaInsets();
+  const { width, isTablet } = useResponsive();
   const [tab, setTab] = useState<Tab>("orders");
   const [gridH, setGridH] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -112,16 +139,22 @@ export function KitchenDisplayScreen() {
           ? additionalGroups
           : doneGroups;
 
+  // A tablet gets a wider board in landscape, where 3 columns would stretch
+  // each ticket into a squat letterbox. Portrait keeps 3 — the same card
+  // proportions the phone board was designed around.
+  const cols = isTablet ? (width >= 1100 ? 4 : COLS) : COLS;
+  const rows = isTablet ? boardRows(gridH) : ROWS;
+
   // Pad the last row so a lone card doesn't stretch across the grid.
   const gridData: GridEntry[] = useMemo(() => {
     const d: GridEntry[] = [...visible];
-    while (d.length % COLS !== 0)
+    while (d.length % cols !== 0)
       d.push({ key: `spacer-${d.length}`, spacer: true });
     return d;
-  }, [visible]);
+  }, [visible, cols]);
 
-  // Exactly ROWS rows visible: card height derived from the measured grid.
-  const cardH = gridH > 0 ? Math.floor((gridH - ROWS * GAP) / ROWS) : 0;
+  // Exactly `rows` rows visible: card height derived from the measured grid.
+  const cardH = gridH > 0 ? Math.floor((gridH - rows * GAP) / rows) : 0;
 
   // Detail sheet target, resolved live so it tracks (and auto-closes on)
   // realtime changes — e.g. completing from the sheet removes the group.
@@ -155,6 +188,7 @@ export function KitchenDisplayScreen() {
           count={activeGroups.length}
           color={colors.statusRed}
           active={tab === "orders"}
+          large={isTablet}
           onPress={() => setTab("orders")}
         />
         <StatusTab
@@ -162,6 +196,7 @@ export function KitchenDisplayScreen() {
           count={takeawayGroups.length}
           color={colors.statusBlue}
           active={tab === "takeaway"}
+          large={isTablet}
           onPress={() => setTab("takeaway")}
         />
         <StatusTab
@@ -169,6 +204,7 @@ export function KitchenDisplayScreen() {
           count={additionalGroups.length}
           color={colors.statusIndigo}
           active={tab === "additional"}
+          large={isTablet}
           onPress={() => setTab("additional")}
         />
         <StatusTab
@@ -176,6 +212,7 @@ export function KitchenDisplayScreen() {
           count={doneGroups.length}
           color={colors.statusGreen}
           active={tab === "completed"}
+          large={isTablet}
           onPress={() => setTab("completed")}
         />
       </View>
@@ -197,9 +234,12 @@ export function KitchenDisplayScreen() {
         >
           {cardH > 0 && (
             <FlatList
+              // RN cannot change `numColumns` on a live list — remounting on
+              // the count is what lets the board re-flow across a rotation.
+              key={`board-${cols}`}
               data={gridData}
               keyExtractor={(g) => g.key}
-              numColumns={COLS}
+              numColumns={cols}
               columnWrapperStyle={styles.gridRow}
               contentContainerStyle={{
                 flexGrow: 1, // lets the empty state center itself
@@ -246,28 +286,46 @@ function StatusTab({
   count,
   color,
   active,
+  large,
   onPress,
 }: {
   label: string;
   count: number;
   color: string;
   active: boolean;
+  /** Tablet sizing — the bar is read from across the kitchen, not in hand. */
+  large?: boolean;
   onPress: () => void;
 }) {
   return (
     <Pressable
       onPress={onPress}
+      // Switching board is moving between choices, so it ticks rather than
+      // taps — and re-tapping the tab you're already on stays silent.
+      onPressIn={active ? undefined : feel.select}
       style={({ pressed }) => [
         styles.tab,
+        large && styles.tabLarge,
         active && { borderBottomColor: color },
         pressed && styles.tabPressed,
       ]}
     >
-      <Text style={[styles.tabLabel, { color }]} numberOfLines={1}>
+      <Text
+        style={[styles.tabLabel, large && styles.tabLabelLarge, { color }]}
+        numberOfLines={1}
+      >
         {label}
       </Text>
-      <View style={[styles.tabBadge, { backgroundColor: color }]}>
-        <Text style={styles.tabBadgeText}>{count}</Text>
+      <View
+        style={[
+          styles.tabBadge,
+          large && styles.tabBadgeLarge,
+          { backgroundColor: color },
+        ]}
+      >
+        <Text style={[styles.tabBadgeText, large && styles.tabBadgeTextLarge]}>
+          {count}
+        </Text>
       </View>
     </Pressable>
   );
@@ -316,6 +374,10 @@ const styles = StyleSheet.create({
     borderBottomColor: "transparent",
     marginBottom: -1, // active underline sits on the bar's hairline
   },
+  tabLarge: {
+    paddingVertical: space.s3,
+    gap: space.s2,
+  },
   tabPressed: {
     opacity: 0.7,
   },
@@ -325,6 +387,10 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     flexShrink: 1,
   },
+  tabLabelLarge: {
+    fontSize: 14,
+    letterSpacing: 0.6,
+  },
   tabBadge: {
     minWidth: 18,
     height: 18,
@@ -333,10 +399,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  tabBadgeLarge: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+  },
   tabBadgeText: {
     fontFamily: fonts.extrabold,
     fontSize: 10,
     color: colors.textInverse,
+  },
+  tabBadgeTextLarge: {
+    fontSize: 12,
   },
   gridWrap: {
     flex: 1,

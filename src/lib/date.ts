@@ -15,6 +15,28 @@ export function dayKey(d: Date = new Date()): string {
   return `${y}-${m}-${day}`;
 }
 
+/** Day of the week in IST: 0 = Sunday … 6 = Saturday. Offer schedules ("every
+ *  Monday") are expressed in these numbers. */
+export function istDayOfWeek(d: Date = new Date()): number {
+  return new Date(d.getTime() + IST_OFFSET_MS).getUTCDay();
+}
+
+/** Minutes elapsed since IST midnight (0–1439) — the unit offer time windows
+ *  ("5pm–8pm happy hour") are stored in. */
+export function istMinutesOfDay(d: Date = new Date()): number {
+  const ist = new Date(d.getTime() + IST_OFFSET_MS);
+  return ist.getUTCHours() * 60 + ist.getUTCMinutes();
+}
+
+/** 1050 -> "5:30 PM". Renders a stored offer window bound for display. */
+export function formatMinutesIST(minutes: number): string {
+  const m = ((Math.round(minutes) % 1440) + 1440) % 1440;
+  const h24 = Math.floor(m / 60);
+  const ampm = h24 >= 12 ? "PM" : "AM";
+  const h = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h}:${String(m % 60).padStart(2, "0")} ${ampm}`;
+}
+
 /** Start of the current IST business day, as a real Date (for range queries). */
 export function startOfDayIST(d: Date = new Date()): Date {
   const ist = new Date(d.getTime() + IST_OFFSET_MS);
@@ -68,6 +90,28 @@ export function formatDateIST(d: Date): string {
   const day = String(ist.getUTCDate()).padStart(2, "0");
   const m = String(ist.getUTCMonth() + 1).padStart(2, "0");
   return `${day}-${m}-${ist.getUTCFullYear()}`;
+}
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * "06 Aug" from a `dayKey` (yyyy-mm-dd). The key is already a business-day
+ * label, so it is split as text — never re-parsed against a timezone.
+ */
+export function formatDayKeyShort(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  if (!y || !m || !d) return key;
+  return `${String(d).padStart(2, "0")} ${MONTHS[m - 1]}`;
+}
+
+/** "06 Aug 2026" from a `dayKey`. */
+export function formatDayKeyFull(key: string): string {
+  const year = key.split("-")[0];
+  const short = formatDayKeyShort(key);
+  return short === key ? key : `${short} ${year}`;
 }
 
 /** Clock time like "10:04 AM" in IST (manual offset — see note above). */

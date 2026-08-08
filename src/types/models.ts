@@ -13,6 +13,7 @@
  *     tables/{tableId}
  *     menuCategories/{categoryId}
  *     menuItems/{itemId}
+ *     offers/{offerId}
  *     orders/{orderId}
  *     kots/{kotId}
  *     bills/{billId}
@@ -173,6 +174,110 @@ export interface MenuItem {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Offers (product discounts)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * How an offer computes its discount. Deliberately only four, because every
+ * promotion an owner asks for is one of these plus a SCHEDULE:
+ *
+ *   "Monday Madness"  = `percent` + days:[1]
+ *   "BOGO"            = `bogo`, buyQty 1 / freeQty 1
+ *   "Couple Coffee"   = `bundle`, bundleQty 2 / bundlePrice 19900
+ *   "Happy Hour"      = `percent` + startMinutes/endMinutes
+ *
+ * Adding a fifth kind should feel wrong — check whether it is really a
+ * schedule or a scope on one of these first.
+ */
+export type OfferKind =
+  /** X% off each covered unit. */
+  | "percent"
+  /** A flat ₹X off each covered unit (never below free). */
+  | "flat"
+  /** Buy N, get M free — the M CHEAPEST covered units cost nothing. */
+  | "bogo"
+  /** Any N covered units for a fixed price (a combo/meal deal). */
+  | "bundle";
+
+export const OFFER_KINDS: readonly OfferKind[] = [
+  "percent",
+  "flat",
+  "bogo",
+  "bundle",
+];
+
+export const OFFER_KIND_LABELS: Record<OfferKind, string> = {
+  percent: "% Off",
+  flat: "₹ Off",
+  bogo: "Buy N Get M",
+  bundle: "Combo Price",
+};
+
+/** Sun-first, matching `istDayOfWeek()`. Index = the stored day number. */
+export const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * A restaurant's discount rule, e.g. "Monday Madness — 30% off Desserts".
+ *
+ * An offer is never applied by hand: the pricing engine (`src/lib/offers.ts`)
+ * matches live offers against the order's lines and stamps the resulting
+ * discount onto each line. What it stamps is a SNAPSHOT (`offerName` and the
+ * paise amount live on the order line), so editing or deleting an offer never
+ * reaches back and rewrites a bill that already used it.
+ *
+ * ABSENT schedule fields = always live, which mirrors the trial fields'
+ * "absence is the safe default" property: a promo the owner never restricted
+ * runs every day rather than silently never running.
+ */
+export interface Offer {
+  id: string;
+  /** What the customer sees on the bill, e.g. "Monday Madness". */
+  name: string;
+  kind: OfferKind;
+  /** The day-to-day switch. `false` = configured but not running. */
+  enabled: boolean;
+
+  // ── Scope: which products it covers ──────────────────────────────────────
+  /** Specific menu items. */
+  itemIds: string[];
+  /** Whole categories — new items added to one join the offer automatically. */
+  categoryIds: string[];
+
+  // ── The numbers. Only the fields its `kind` uses are set. ────────────────
+  /** `percent`: 0–100. */
+  percentOff?: number;
+  /** `flat`: paise off each unit. */
+  amountOff?: number;
+  /** `bogo`: units that must be paid for. */
+  buyQty?: number;
+  /** `bogo`: units given free per set. */
+  freeQty?: number;
+  /** `bundle`: units in one combo. */
+  bundleQty?: number;
+  /** `bundle`: paise the combo costs in total. */
+  bundlePrice?: number;
+
+  // ── Schedule (all IST — see istDayOfWeek/istMinutesOfDay) ────────────────
+  /** 0=Sun … 6=Sat. Absent/empty = every day. THIS is "Monday Madness". */
+  days?: number[];
+  /** Minutes past IST midnight. Both bounds or neither; absent = all day.
+   *  `startMinutes > endMinutes` is a window that wraps midnight (22:00–02:00). */
+  startMinutes?: number;
+  endMinutes?: number;
+  /** Campaign window, yyyy-mm-dd IST inclusive. Absent = unbounded. */
+  startsOn?: string;
+  endsOn?: string;
+
+  /** Cap on how many times the offer may trigger within ONE order (bogo sets /
+   *  bundle sets). Absent = uncapped. */
+  maxPerOrder?: number;
+  /** Tie-break when two offers give a line the same discount; higher wins. */
+  priority: number;
+  createdAt: Ts;
+  updatedAt: Ts;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Orders & KOT
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -189,12 +294,31 @@ export interface OrderItem {
   name: string;
   /** Snapshot of price (paise) at time of adding — never trust live price. */
   price: number;
+  /** Snapshot of the item's category, so category-scoped offers can be priced
+   *  from the order alone without a menu lookup. Absent on lines created
+   *  before offers existed — such a line simply misses category offers. */
+  categoryId?: string;
   qty: number;
   notes?: string;
   kotStatus: KotItemStatus;
   /** Which KOT ticket this line was sent on (null until sent). */
   kotId: string | null;
   voided: boolean;
+  /**
+   * OFFERS. `price` above stays the UNDISCOUNTED menu price and `qty` the real
+   * quantity — a BOGO line is 2 units at full price with one unit's worth
+   * knocked off here, NOT 2 units at half price. That distinction is what lets
+   * the reports separate "we sold ₹300 of coffee" from "₹150 of it was given
+   * away", and it is why the kitchen ticket needs no knowledge of offers at
+   * all: it reads `qty` and sends out two coffees.
+   *
+   * `offerName` is snapshotted so deleting the offer never rewrites history.
+   * ABSENT = no offer applied.
+   */
+  offerId?: string;
+  offerName?: string;
+  /** Paise off this WHOLE line (not per unit). Never exceeds price * qty. */
+  offerDiscount?: number;
   addedAt: Ts;
 }
 
@@ -205,8 +329,13 @@ export interface Order {
   waiterId: string;
   status: OrderStatus;
   items: OrderItem[];
-  /** Sum of non-voided line totals (paise). Recomputed on every write. */
+  /** Sum of non-voided line totals (paise), BEFORE offers. Recomputed on every
+   *  write. Deliberately gross so the figure keeps meaning what it always did. */
   subtotal: number;
+  /** Σ of the lines' `offerDiscount` (paise). What the customer actually owes
+   *  before tax is `subtotal - offerDiscount`. Absent = no offers on this
+   *  order; always read with `?? 0`. */
+  offerDiscount?: number;
   billId: string | null;
   createdAt: Ts;
   updatedAt: Ts;
@@ -315,8 +444,24 @@ export interface Bill {
   tableLabel: string;
   /** All money fields in paise (integer). */
   subtotal: number;
+  /**
+   * MANUAL discount — a cashier typing "10% off this table". Pinned to 0 by
+   * firestore.rules and there is no UI for it: an ad-hoc discount at the till
+   * is indistinguishable from theft. Offers are a different thing entirely and
+   * live in `offerDiscount` below, which is why these two stay at zero.
+   */
   discountPercent: number; // 0–100
   discountAmount: number;
+  /**
+   * OFFERS — Σ of the order lines' `offerDiscount` (paise). A discount the
+   * OWNER configured in advance, applied automatically by the pricing engine,
+   * as opposed to the manual one above that nobody may grant.
+   *
+   * `subtotal` stays gross, so `subtotal - offerDiscount` is the taxable base
+   * and the receipt can show the customer what they saved. Absent on bills
+   * created before offers existed; always read with `?? 0`.
+   */
+  offerDiscount?: number;
   cgst: number;
   sgst: number;
   gstTotal: number;
@@ -399,5 +544,18 @@ export interface DailySummary {
    */
   voidedBillCount?: number;
   voidedRevenue?: number; // paise refunded
+  /**
+   * OFFERS. `totalRevenue` is what was actually taken, so it is already NET of
+   * offers — this is the money the promotions gave away to earn it, which is
+   * the only way the owner can answer "is Monday Madness worth running?".
+   *
+   * `byOffer` breaks that down per offer so a promo that costs a lot and sells
+   * nothing is visible next to one that pays for itself. Keyed by offer id
+   * with the name snapshotted, so a deleted offer keeps its history readable.
+   *
+   * Absent on summaries written before offers existed; always read with `?? 0`.
+   */
+  offerDiscount?: number;
+  byOffer?: Record<string, { name: string; count: number; amount: number }>;
   updatedAt: Ts;
 }

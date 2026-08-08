@@ -149,11 +149,14 @@ async function main() {
   await signIn("waiter");
   {
     const current = await fetchOrder(orderId);
+    // No offers configured in this suite — an empty rule-set prices every
+    // line at full price, which is what the billing flow under test assumes.
     const items = mergeItemIntoLines(
       current.items,
       "gulab-jamun",
       "Gulab Jamun (2 pc)",
-      8000
+      8000,
+      { offers: [], at: new Date() }
     );
     await writeOrderItems(orderId, items);
   }

@@ -9,6 +9,7 @@ import {
   hasContact,
   openContactChat,
 } from "@/config/contact";
+import { feel } from "@/lib/feedback";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
 /**
@@ -91,6 +92,7 @@ export default function Pending() {
                 pressed && styles.pressed,
               ]}
               onPress={onContact}
+              onPressIn={feel.press}
             >
               <Text style={styles.contactText}>Contact {CONTACT_NAME}</Text>
             </Pressable>
@@ -105,6 +107,7 @@ export default function Pending() {
         <Pressable
           style={({ pressed }) => [styles.signOutBtn, pressed && styles.pressed]}
           onPress={() => signOut()}
+          onPressIn={feel.warn}
         >
           <Text style={styles.signOutText}>Sign Out</Text>
         </Pressable>

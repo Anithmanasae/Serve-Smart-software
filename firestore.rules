@@ -278,6 +278,27 @@ service cloud.firestore {
         return 'nonChargeable' in data && data.nonChargeable == true;
       }
 
+      // ---- OFFERS on a bill ------------------------------------------------
+      // `subtotal` stays GROSS of offers, so the offer total has to fit inside
+      // it: a discount larger than the food is a broken bill, and a negative
+      // one is a surcharge wearing a promotion's clothes.
+      //
+      // ABSENT is allowed and means zero — bills written before offers existed
+      // carry no such field, and an order that matched no promotion has
+      // nothing to record. Same "absence is the safe default" property the
+      // trial fields rely on: the safe reading is the one you get by default.
+      //
+      // Note what this does NOT do: it never checks that the amount matches
+      // any offer document. It cannot — offers change, and a bill must keep
+      // the terms it was priced under. The ceiling is the honest guarantee.
+      function validOfferDiscount() {
+        return !('offerDiscount' in request.resource.data)
+          || (request.resource.data.offerDiscount is int
+              && request.resource.data.offerDiscount >= 0
+              && request.resource.data.offerDiscount
+                 <= request.resource.data.subtotal);
+      }
+
       // NC may be applied ONLY on the settle write, and that write must
       // PRESERVE what the comp was worth. Without the three equality checks a
       // cashier could zero the totals on the way out and the owner's NC report
@@ -301,6 +322,13 @@ service cloud.firestore {
             && request.resource.data.subtotal == resource.data.subtotal
             && request.resource.data.gstTotal == resource.data.gstTotal
             && request.resource.data.grandTotal == resource.data.grandTotal
+            // Pinned for the same reason as the three above: a comp write must
+            // not be able to rewrite what the OFFERS on the bill were worth,
+            // or the day's promo cost could be zeroed on the way out. get()
+            // with a default keeps this working on bills that predate offers,
+            // where the field is missing from both sides.
+            && request.resource.data.get('offerDiscount', 0)
+               == resource.data.get('offerDiscount', 0)
           );
       }
 
@@ -507,6 +535,55 @@ service cloud.firestore {
         allow delete: if hasAnyRole(['admin', 'cashier']);
       }
 
+      // ---- offers (product discounts) ------------------------------------
+      // The owner's promotions: BOGO, combo prices, "Monday Madness". EVERY
+      // active staff member reads them, because the waiter's order screen
+      // prices the cart against them live — but only admin/cashier may write
+      // one, exactly like the menu whose prices they modify.
+      //
+      // This is NOT the manual bill discount: that stays banned outright (see
+      // the bills rules below, where discountPercent/discountAmount are pinned
+      // to zero). An offer is decided in advance by the owner and applies to a
+      // product; a till-side percentage is decided by whoever is holding the
+      // cash. Only the first is trustworthy, so only the first exists.
+      //
+      // The amount fields are range-checked here so a bad write cannot plant a
+      // negative or absurd discount that the pricing engine would then stamp
+      // onto every order. `enabled` is the day-to-day switch and `priority`
+      // only ever breaks ties, so neither needs more than a type check.
+      match /offers/{offerId} {
+        allow read: if isActiveStaff();
+        allow create, update: if hasAnyRole(['admin', 'cashier'])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 60
+          && request.resource.data.kind in ['percent', 'flat', 'bogo', 'bundle']
+          && request.resource.data.enabled is bool
+          && request.resource.data.priority is int
+          && request.resource.data.itemIds is list
+          && request.resource.data.categoryIds is list
+          && (!('percentOff' in request.resource.data)
+              || (request.resource.data.percentOff is int
+                  && request.resource.data.percentOff >= 0
+                  && request.resource.data.percentOff <= 100))
+          && (!('amountOff' in request.resource.data)
+              || (request.resource.data.amountOff is int
+                  && request.resource.data.amountOff >= 0))
+          && (!('buyQty' in request.resource.data)
+              || (request.resource.data.buyQty is int
+                  && request.resource.data.buyQty >= 1))
+          && (!('freeQty' in request.resource.data)
+              || (request.resource.data.freeQty is int
+                  && request.resource.data.freeQty >= 1))
+          && (!('bundleQty' in request.resource.data)
+              || (request.resource.data.bundleQty is int
+                  && request.resource.data.bundleQty >= 1))
+          && (!('bundlePrice' in request.resource.data)
+              || (request.resource.data.bundlePrice is int
+                  && request.resource.data.bundlePrice >= 0));
+        allow delete: if hasAnyRole(['admin', 'cashier']);
+      }
+
       // ---- tables --------------------------------------------------------
       // Floor staff read tables and update occupancy/merge/shift status.
       // The cashier (restaurant owner) sizes the floor from Account → Tables,
@@ -547,8 +624,11 @@ service cloud.firestore {
 
       // ---- bills ---------------------------------------------------------
       // A waiter may only REQUEST a bill. Finalizing, taking payment, and
-      // marking paid are cashier/admin only. Discounts do not exist: every
-      // bill must carry discountPercent == 0 and discountAmount == 0. Paid
+      // marking paid are cashier/admin only. MANUAL discounts do not exist:
+      // every bill must carry discountPercent == 0 and discountAmount == 0, so
+      // nobody at the till can decide to knock money off a total. The owner's
+      // pre-configured OFFERS are the sanctioned path and arrive separately in
+      // `offerDiscount` (validOfferDiscount()), capped by the subtotal. Paid
       // bills are immutable apart from a reprint and a same-day cancellation
       // (validVoidUpdate()). Totals must be internally consistent and
       // non-negative. A bill is never BORN non-chargeable — NC can only arrive
@@ -563,6 +643,7 @@ service cloud.firestore {
           && request.resource.data.grandTotal >= 0
           && request.resource.data.discountPercent == 0
           && request.resource.data.discountAmount == 0
+          && validOfferDiscount()
           && !isNc(request.resource.data)
           && request.resource.data.gstTotal ==
              request.resource.data.cgst + request.resource.data.sgst
@@ -592,6 +673,7 @@ service cloud.firestore {
               && request.resource.data.grandTotal >= 0
               && request.resource.data.discountPercent == 0
               && request.resource.data.discountAmount == 0
+              && validOfferDiscount()
               && request.resource.data.gstTotal ==
                  request.resource.data.cgst + request.resource.data.sgst
             )

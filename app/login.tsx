@@ -15,6 +15,7 @@ import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { BrandLogo } from "@/components/BrandLogo";
 import { DEMO_MODE, FIREBASE_PROJECT_ID } from "@/lib/firebase";
+import { feel } from "@/lib/feedback";
 import { colors, space, radius } from "@/theme/theme";
 
 export default function Login() {
@@ -31,6 +32,7 @@ export default function Login() {
 
   async function onSubmit() {
     if (!email.trim() || !password) {
+      feel.error();
       setError("Enter your email and password.");
       return;
     }
@@ -38,7 +40,11 @@ export default function Login() {
     setBusy(true);
     try {
       await signIn(email.trim(), password);
+      feel.success(); // the redirect is instant — this is the only "you're in"
     } catch (e) {
+      // A wrong password is the most common failure in the app, and the one
+      // users are least likely to be watching the screen for.
+      feel.error();
       setError(friendlyAuthError(e));
     } finally {
       setBusy(false);
@@ -101,6 +107,7 @@ export default function Login() {
               pressed && styles.buttonPressed,
             ]}
             onPress={onSubmit}
+            onPressIn={feel.press}
             disabled={busy}
           >
             <Text style={styles.buttonText}>
@@ -116,6 +123,7 @@ export default function Login() {
           <Pressable
             style={({ pressed }) => [styles.signupLink, pressed && { opacity: 0.6 }]}
             onPress={() => router.push("/signup")}
+            onPressIn={feel.press}
             disabled={busy}
           >
             <Text style={styles.signupText}>

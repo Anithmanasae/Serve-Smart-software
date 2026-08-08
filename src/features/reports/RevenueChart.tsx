@@ -28,12 +28,24 @@ const PAD_X = space.s2;
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
+/**
+ * Beyond a fortnight the axis is sampled, so weekday names stop identifying
+ * anything ("Tue … Tue … Tue") — long ranges get calendar dates instead.
+ */
+const DATE_LABELS_FROM = 15;
+
 /** Weekday abbreviation from a yyyy-mm-dd key (UTC-parsed, tz-safe). */
 function weekdayLabel(dayKey: string): string {
   const [y, m, d] = dayKey.split("-").map(Number);
   if (!y || !m || !d) return "";
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
   return WEEKDAYS[dow];
+}
+
+/** "22/07" from a yyyy-mm-dd key. */
+function dateLabel(dayKey: string): string {
+  const [, m, d] = dayKey.split("-");
+  return m && d ? `${d}/${m}` : "";
 }
 
 export function RevenueChart({ points }: RevenueChartProps) {
@@ -73,9 +85,10 @@ export function RevenueChart({ points }: RevenueChartProps) {
       ` L${xFor(n - 1)},${baseline} Z`;
   }
 
-  // Label sampling: at most ~7 labels so a 30-day range stays legible.
+  // Label sampling: at most ~7 labels so a long range stays legible.
   const maxLabels = 7;
   const step = Math.max(1, Math.ceil(n / maxLabels));
+  const useDates = n >= DATE_LABELS_FROM;
 
   return (
     <View onLayout={onLayout}>
@@ -122,8 +135,15 @@ export function RevenueChart({ points }: RevenueChartProps) {
       <View style={styles.labelsRow}>
         {points.map((p, i) =>
           i % step === 0 || i === n - 1 ? (
-            <Text key={p.date} style={[styles.axisLabel, { left: xFor(i) }]}>
-              {weekdayLabel(p.date)}
+            <Text
+              key={p.date}
+              style={[
+                styles.axisLabel,
+                useDates && styles.axisLabelWide,
+                { left: xFor(i) },
+              ]}
+            >
+              {useDates ? dateLabel(p.date) : weekdayLabel(p.date)}
             </Text>
           ) : null
         )}
@@ -165,6 +185,11 @@ const styles = StyleSheet.create({
     transform: [{ translateX: -12 }],
     width: 24,
     textAlign: "center",
+  },
+  // "22/07" needs more room than "Tue".
+  axisLabelWide: {
+    width: 36,
+    transform: [{ translateX: -18 }],
   },
   peakCaption: {
     marginTop: space.s1,

@@ -14,7 +14,7 @@ import { useAuth } from "@/features/auth/AuthContext";
 import { paths } from "@/lib/firestore/paths";
 import { useCollectionData } from "@/lib/firestore/useRealtime";
 import { setTableCount } from "@/features/tables/tablesApi";
-import { successFeedback, tapFeedback } from "@/lib/feedback";
+import { feel } from "@/lib/feedback";
 import { Loading } from "@/components/Loading";
 import { colors, space, radius, shadow } from "@/theme/theme";
 import type { Table } from "@/types/models";
@@ -56,7 +56,9 @@ export default function TablesSetupRoute() {
   const removingBelowInUse = target < inUse;
 
   function step(delta: number) {
-    tapFeedback();
+    // A stepper is scrubbed, not pressed — `tick` is the one feel Android is
+    // allowed to render softly (or not at all) when it comes fast.
+    feel.tick();
     setTarget((t) =>
       Math.max(0, Math.min(MAX_TABLES, (t ?? 0) + delta)),
     );
@@ -72,12 +74,13 @@ export default function TablesSetupRoute() {
     setBusy(true);
     try {
       const result = await setTableCount(tables, target);
-      successFeedback();
+      feel.success();
       Alert.alert(
         "Tables updated",
         `Your floor now has ${result} table${result === 1 ? "" : "s"}.`,
       );
     } catch (e) {
+      feel.error();
       Alert.alert(
         "Couldn't update tables",
         e instanceof Error ? e.message : String(e),
@@ -97,6 +100,7 @@ export default function TablesSetupRoute() {
           <Pressable
             style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
             onPress={() => router.back()}
+            onPressIn={feel.dismiss}
           >
             <Text style={styles.backBtnText}>‹ Back</Text>
           </Pressable>
@@ -169,6 +173,7 @@ export default function TablesSetupRoute() {
             pressed && styles.pressed,
           ]}
           onPress={save}
+          onPressIn={feel.press}
           disabled={!changed || busy}
         >
           <Text style={styles.saveText}>

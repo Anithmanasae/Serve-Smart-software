@@ -214,6 +214,14 @@ export function encodeReceipt(input: ReceiptInput): EncodedReceipt {
   // Totals — straight off the Bill doc.
   w.line(`Items : ${totalQty}`);
   w.line(spread("Subtotal", paiseToRs(bill.subtotal), cols));
+  // Offers print between the subtotal and the tax, matching the arithmetic:
+  // they come off the gross before GST is worked out. A guest who was promised
+  // a deal at the table looks for this line, so it prints on every copy.
+  if ((bill.offerDiscount ?? 0) > 0) {
+    w.line(
+      spread("Offer Savings", `-${paiseToRs(bill.offerDiscount ?? 0)}`, cols)
+    );
+  }
   if (bill.gstTotal > 0) {
     w.line(spread(`CGST (${pct(TAX_CONFIG.cgstRate)})`, paiseToRs(bill.cgst), cols));
     w.line(spread(`SGST (${pct(TAX_CONFIG.sgstRate)})`, paiseToRs(bill.sgst), cols));

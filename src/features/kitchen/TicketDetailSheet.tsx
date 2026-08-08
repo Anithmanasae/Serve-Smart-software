@@ -19,7 +19,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, space } from "@/theme/theme";
 import { formatTimeIST } from "@/lib/date";
-import { animateNextLayout, tapFeedback } from "@/lib/feedback";
+import { animateNextLayout, feel } from "@/lib/feedback";
 import { ElapsedTime } from "@/components/ElapsedTime";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
 import { encodeKot } from "@/lib/printer/escpos";
@@ -94,15 +94,19 @@ export function TicketDetailSheet({
   const anyNew = group.tickets.some((t) => t.status === "new");
   const anyPreparing = group.tickets.some((t) => t.status === "preparing");
 
+  // Start / ready / complete all land here. The press itself was already felt
+  // on touch-down, so this only reports the outcome of the write.
   const run = useCallback((write: Promise<unknown>) => {
-    tapFeedback();
     animateNextLayout(); // the group may leave the board behind the sheet
-    write.catch((e) =>
-      Alert.alert(
-        "Couldn’t update ticket",
-        e instanceof Error ? e.message : String(e)
-      )
-    );
+    write
+      .then(() => feel.success())
+      .catch((e) => {
+        feel.error();
+        Alert.alert(
+          "Couldn’t update ticket",
+          e instanceof Error ? e.message : String(e)
+        );
+      });
   }, []);
 
   // Reprint = real thermal print of that round's KOT, then bump printedCount
@@ -115,10 +119,10 @@ export function TicketDetailSheet({
     (kot: LiveKot) => {
       if (printingId) return;
       if (!isPrintingAvailable()) {
+        feel.error(); // nothing to print to — say so in the hand, not just on screen
         Alert.alert("Printing unavailable", PRINTING_UNAVAILABLE_MESSAGE);
         return;
       }
-      tapFeedback();
       setPrintingId(kot.id);
       void (async () => {
         try {
@@ -130,7 +134,9 @@ export function TicketDetailSheet({
           });
           await printToSavedPrinter(ticket.bytes);
           await reprintKot(kot); // bytes accepted → count the print
+          feel.success();
         } catch (e) {
+          feel.error();
           Alert.alert(
             "Couldn’t print",
             (e instanceof Error ? e.message : String(e)) +
@@ -147,7 +153,11 @@ export function TicketDetailSheet({
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <Pressable style={styles.backdropFill} onPress={onClose} />
+        <Pressable
+          style={styles.backdropFill}
+          onPress={onClose}
+          onPressIn={feel.dismiss}
+        />
         <View style={[styles.sheet, { paddingBottom: insets.bottom + space.s4 }]}>
           {/* ── Header: table + status + close ─────────────────────────── */}
           <View style={styles.header}>
@@ -164,6 +174,7 @@ export function TicketDetailSheet({
             </View>
             <Pressable
               onPress={onClose}
+              onPressIn={feel.dismiss}
               hitSlop={10}
               style={({ pressed }) => [styles.closeBtn, pressed && styles.pressed]}
             >
@@ -198,6 +209,7 @@ export function TicketDetailSheet({
             <View style={styles.footerRow}>
               <Pressable
                 onPress={() => run(startGroup(group))}
+                onPressIn={feel.tap}
                 style={({ pressed }) => [
                   styles.actionBtn,
                   anyNew && styles.startActive,
@@ -212,6 +224,7 @@ export function TicketDetailSheet({
               </Pressable>
               <Pressable
                 onPress={() => run(readyGroup(group))}
+                onPressIn={feel.tap}
                 style={({ pressed }) => [
                   styles.actionBtn,
                   anyPreparing && styles.readyActive,
@@ -235,6 +248,7 @@ export function TicketDetailSheet({
             ) : (
               <Pressable
                 onPress={() => run(completeGroup(group))}
+                onPressIn={feel.press} // the heaviest of the three
                 style={({ pressed }) => [
                   styles.completeBtn,
                   { backgroundColor: accent },
@@ -288,6 +302,7 @@ function RoundSection({
           hitSlop={8}
           style={({ pressed }) => pressed && styles.pressed}
           onPress={() => onReprint(kot)}
+          onPressIn={feel.tap}
           disabled={printing}
         >
           <Text style={styles.reprint}>

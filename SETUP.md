@@ -254,8 +254,48 @@ are inert for any restaurant with no trial fields.
 
 ---
 
+## 6. Connecting the thermal printer
+
+A restaurant can connect its printer two ways, set in **Account → Printer
+Settings**. Both are Android-only and neither works in Expo Go — the native
+code exists only in an installed build.
+
+| | Bluetooth | USB-C cable |
+|---|---|---|
+| Set up first | Pair in Android Bluetooth settings | Plug in an OTG-capable USB-C cable |
+| Permission | "Nearby devices", once | A system dialog per device, re-asked after unplugging |
+| Good for | Printer away from the till, or a phone with a busy port | A fixed till, no pairing, no battery to run flat |
+
+The picker shows a **Connection** toggle only when the device supports both;
+a tablet without USB host (OTG) never sees the USB option. One printer is saved
+at a time and the transport is saved with it, so switching is a single tap and
+`Test print` always exercises the connection that receipts will use.
+
+Both transports send byte-identical ESC/POS from `src/lib/printer/escpos.ts` —
+paper width and layout do not change with the cable.
+
+> **USB needs a fresh APK.** It ships as a local native module
+> (`modules/usb-printer`, autolinked at prebuild), so an existing install shows
+> Bluetooth only until you rebuild and redistribute:
+>
+> ```bash
+> eas build --profile smartserve --platform android
+> ```
+>
+> Nothing else regresses: an APK without the module falls back to Bluetooth,
+> and a printer saved before this change keeps working — a saved printer with
+> no transport recorded is read as Bluetooth.
+
+---
+
 ## Troubleshooting
 
+- **USB printer doesn't appear in the list** — the cable must be OTG-capable
+  (many charge-only USB-C cables are not), and some printers only enumerate
+  once they're powered on. If the list stays empty on a phone, check that it
+  supports USB host at all — the toggle is hidden when it doesn't.
+- **"The printer is busy — another app may be using it"** — another app holds
+  the USB interface. Close it, or unplug and replug the cable.
 - **"Component auth has not been registered yet"** — Metro cache; run
   `npx expo start -c` once. (The `metro.config.js` fix is already in place.)
 - **"Missing or insufficient permissions"** — rules not deployed (step 2) or the

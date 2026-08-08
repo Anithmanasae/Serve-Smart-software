@@ -22,9 +22,11 @@ import { randomUUID } from "expo-crypto";
 import { db } from "@/lib/firebase";
 import { paths } from "@/lib/firestore/paths";
 import { computeBill } from "@/lib/money";
+import { applyOffers, totalOfferDiscount } from "@/lib/offers";
 import type {
   Kot,
   KotItem,
+  Offer,
   Order,
   OrderItem,
   OrderType,
@@ -33,19 +35,74 @@ import type {
 /** First minted KOT ticket is this + 1 (i.e. #4001). */
 const KOT_TICKET_SEED = 4000;
 
-/** Σ price*qty over non-voided lines (paise) — reuses computeBill's subtotal. */
+/** Σ price*qty over non-voided lines (paise) — reuses computeBill's subtotal.
+ *  GROSS of offers, matching `Order.subtotal`'s definition. */
 function subtotalOf(items: OrderItem[]): number {
   return computeBill(items.map((l) => ({ price: l.price, qty: l.qty, voided: l.voided })))
     .subtotal;
 }
 
-/** Build a fresh `pending` order line for a menu item (price snapshotted). */
-export function newOrderLine(menuItemId: string, name: string, price: number): OrderItem {
+/**
+ * Everything the pricing engine needs, threaded through the line mutators.
+ */
+export interface PricingContext {
+  offers: Offer[];
+  /**
+   * The moment the order's pricing is judged against — the order's OWN
+   * `createdAt`, not the wall clock.
+   *
+   * This is what stops a tab losing its discount mid-meal. A party seated at
+   * 6:50pm during a 4–7pm happy hour orders another round at 7:10; pricing
+   * against "now" would silently re-rate the whole tab, including the drinks
+   * already served and quoted. Freezing at the moment the order opened means
+   * one rule the floor can actually say out loud: the deal you got when you sat
+   * down applies to your table. The same choice keeps a long dinner from losing
+   * a day-scoped promo when it crosses midnight.
+   */
+  at: Date;
+}
+
+/**
+ * Re-price a line-set against the restaurant's offers.
+ *
+ * Called after EVERY mutation rather than only when a line is added, because a
+ * quantity change can start or stop a quantity-based deal: dropping the third
+ * coffee has to take the BOGO discount away again, and only a full re-run over
+ * the whole set can see that.
+ */
+export function repriceLines(
+  items: OrderItem[],
+  ctx: PricingContext
+): OrderItem[] {
+  return applyOffers(items, ctx.offers, ctx.at);
+}
+
+/** The two derived money fields every order write must carry. */
+function totalsOf(items: OrderItem[]): {
+  subtotal: number;
+  offerDiscount: number;
+} {
+  return {
+    subtotal: subtotalOf(items),
+    offerDiscount: totalOfferDiscount(items),
+  };
+}
+
+/** Build a fresh `pending` order line for a menu item (price snapshotted).
+ *  `categoryId` is snapshotted alongside the price so category-scoped offers
+ *  can be applied from the order alone, with no menu lookup. */
+export function newOrderLine(
+  menuItemId: string,
+  name: string,
+  price: number,
+  categoryId?: string
+): OrderItem {
   return {
     lineId: randomUUID(),
     menuItemId,
     name,
     price,
+    ...(categoryId ? { categoryId } : {}),
     qty: 1,
     notes: "",
     kotStatus: "pending",
@@ -73,14 +130,17 @@ export function newOrderLine(menuItemId: string, name: string, price: number): O
 // money-critical mutations (send KOT, billing) stay transactional.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Pure: merge one unit of a menu item into a line-set. Increments qty on an
- *  existing pending, note-less, un-voided line for the item, else appends a
- *  fresh line — same semantics as addOrCreateOrder's append path. */
+/** Pure: merge one unit of a menu item into a line-set, then re-price against
+ *  `offers`. Increments qty on an existing pending, note-less, un-voided line
+ *  for the item, else appends a fresh line — same semantics as
+ *  addOrCreateOrder's append path. */
 export function mergeItemIntoLines(
   items: OrderItem[],
   menuItemId: string,
   name: string,
-  price: number
+  price: number,
+  ctx: PricingContext,
+  categoryId?: string
 ): OrderItem[] {
   const idx = items.findIndex(
     (l) =>
@@ -89,23 +149,30 @@ export function mergeItemIntoLines(
       !l.voided &&
       !l.notes
   );
-  if (idx >= 0) {
-    return items.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l));
-  }
-  return [...items, newOrderLine(menuItemId, name, price)];
+  const next =
+    idx >= 0
+      ? items.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l))
+      : [...items, newOrderLine(menuItemId, name, price, categoryId)];
+  return repriceLines(next, ctx);
 }
 
-/** Pure: set a pending line's qty; `qty <= 0` removes the line. */
+/** Pure: set a pending line's qty; `qty <= 0` removes the line. Re-priced,
+ *  because a quantity change can start or end a "buy N" deal. */
 export function setLineQtyInLines(
   items: OrderItem[],
   lineId: string,
-  qty: number
+  qty: number,
+  ctx: PricingContext
 ): OrderItem[] {
-  if (qty <= 0) return items.filter((l) => l.lineId !== lineId);
-  return items.map((l) => (l.lineId === lineId ? { ...l, qty } : l));
+  const next =
+    qty <= 0
+      ? items.filter((l) => l.lineId !== lineId)
+      : items.map((l) => (l.lineId === lineId ? { ...l, qty } : l));
+  return repriceLines(next, ctx);
 }
 
-/** Pure: set a line's special-instructions note. */
+/** Pure: set a line's special-instructions note. A note splits nothing and
+ *  changes no quantity, so the offer stamps carry over untouched. */
 export function setLineNotesInLines(
   items: OrderItem[],
   lineId: string,
@@ -114,15 +181,15 @@ export function setLineNotesInLines(
   return items.map((l) => (l.lineId === lineId ? { ...l, notes } : l));
 }
 
-/** Persist an order's full line-set (subtotal recomputed). Plain write —
- *  echoes into the local cache instantly. */
+/** Persist an order's full line-set (subtotal + offer total recomputed). Plain
+ *  write — echoes into the local cache instantly. */
 export function writeOrderItems(
   orderId: string,
   items: OrderItem[]
 ): Promise<void> {
   return updateDoc(paths.order(orderId), {
     items,
-    subtotal: subtotalOf(items),
+    ...totalsOf(items),
     updatedAt: serverTimestamp(),
   });
 }
@@ -140,10 +207,28 @@ export function createOrderLocal(params: {
   menuItemId: string;
   name: string;
   price: number;
+  categoryId?: string;
+  offers?: Offer[];
 }): { orderId: string; items: OrderItem[]; commit: Promise<void> } {
-  const { tableId, orderType, waiterId, menuItemId, name, price } = params;
+  const {
+    tableId,
+    orderType,
+    waiterId,
+    menuItemId,
+    name,
+    price,
+    categoryId,
+    offers = [],
+  } = params;
   const newOrderRef = doc(paths.orders());
-  const items = [newOrderLine(menuItemId, name, price)];
+  // Priced on creation, so a single-item order that already qualifies (a flat
+  // or percent deal needs no second unit) shows its discount from the first
+  // tap. This moment is also the one every later edit is re-priced against —
+  // see PricingContext.at.
+  const items = repriceLines(
+    [newOrderLine(menuItemId, name, price, categoryId)],
+    { offers, at: new Date() }
+  );
 
   const order: Omit<Order, "id"> = {
     tableId: tableId ?? null,
@@ -151,7 +236,7 @@ export function createOrderLocal(params: {
     waiterId,
     status: "open",
     items,
-    subtotal: subtotalOf(items),
+    ...totalsOf(items),
     billId: null,
     createdAt: serverTimestamp() as unknown as Order["createdAt"],
     updatedAt: serverTimestamp() as unknown as Order["updatedAt"],
@@ -242,9 +327,12 @@ export async function sendKot(
         ? { ...l, kotStatus: "sent" as const, kotId: kotRef.id }
         : l
     );
+    // Offer stamps ride along untouched: sending to the kitchen only flips
+    // kotStatus, and the KOT itself carries the real `qty` — a BOGO's free
+    // unit is food that has to be cooked.
     tx.update(paths.order(orderId), {
       items,
-      subtotal: subtotalOf(items),
+      ...totalsOf(items),
       updatedAt: serverTimestamp(),
     });
 

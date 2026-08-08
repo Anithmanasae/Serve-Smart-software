@@ -12,7 +12,7 @@ import { Animated, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { formatMoney } from "@/lib/money";
 import { shortElapsedLabel } from "@/lib/date";
-import { mediumTapFeedback } from "@/lib/feedback";
+import { feel } from "@/lib/feedback";
 import { ElapsedTime } from "@/components/ElapsedTime";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import type { Order, Table, TableStatus } from "@/types/models";
@@ -49,7 +49,11 @@ export const TableCard = memo(function TableCard({
 }) {
   // Spring-driven press scale so the tile feels tactile (0.97 on press).
   const scale = useRef(new Animated.Value(1)).current;
+  // The feel rides the press-in spring, not the press: a table card always
+  // leads somewhere (the order screen, or the actions sheet), and the pulse
+  // should arrive as the tile gives way rather than after the route changes.
   const pressIn = useCallback(() => {
+    feel.press();
     Animated.spring(scale, {
       toValue: 0.97,
       useNativeDriver: true,
@@ -66,7 +70,6 @@ export const TableCard = memo(function TableCard({
     }).start();
   }, [scale]);
   const handlePress = useCallback(() => {
-    mediumTapFeedback();
     onPress(table);
   }, [onPress, table]);
 

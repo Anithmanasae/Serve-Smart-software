@@ -46,9 +46,17 @@ export function formatWhatsAppReceipt(input: WhatsAppReceiptInput): string {
   out.push("*Items*");
   for (const i of lines) {
     out.push(`${i.qty} × ${i.name} — ${formatMoney(i.price * i.qty)}`);
+    if ((i.offerDiscount ?? 0) > 0) {
+      out.push(
+        `   🏷 ${i.offerName ?? "Offer"} — -${formatMoney(i.offerDiscount ?? 0)}`
+      );
+    }
   }
   out.push("");
   out.push(`Subtotal: ${formatMoney(bill.subtotal)}`);
+  if ((bill.offerDiscount ?? 0) > 0) {
+    out.push(`Offer Savings: -${formatMoney(bill.offerDiscount ?? 0)}`);
+  }
   if (bill.discountAmount > 0) {
     out.push(
       `Discount (${bill.discountPercent}%): -${formatMoney(bill.discountAmount)}`

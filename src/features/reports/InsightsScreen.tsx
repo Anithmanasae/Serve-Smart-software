@@ -6,6 +6,10 @@
  * builders, sumTotals/computeDelta, revenueSeries, topItems, sourceSummary,
  * paymentSummary). Nothing here re-implements aggregation or touches Firestore
  * directly. Money is always rendered via `formatMoney`.
+ *
+ * The range selector offers three presets plus a custom range picked in
+ * `DateRangeSheet`. Everything downstream reads the resulting `DateRange`, so
+ * a custom span is not a special case anywhere below this file's state.
  */
 import { useMemo, useState } from "react";
 import {
@@ -19,6 +23,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { formatMoney } from "@/lib/money";
+import { formatDayKeyFull, formatDayKeyShort } from "@/lib/date";
+import { feel } from "@/lib/feedback";
+import { useResponsive } from "@/lib/responsive";
 import {
   NC_REASONS,
   NC_REASON_LABELS,
@@ -30,25 +37,40 @@ import {
   currentRange,
   ncReasonSummary,
   paymentSummary,
-  previousRange,
+  previousOf,
+  rangeBetween,
   revenueSeries,
   sourceSummary,
   sumTotals,
   summariesForKeys,
   topItems,
   useDailySummaries,
-  type RangeKind,
+  type DateRange,
+  type PresetKind,
 } from "./reportsData";
+import { DateRangeSheet } from "./DateRangeSheet";
 import { KpiCard } from "./KpiCard";
 import { RevenueChart } from "./RevenueChart";
 
 type Tab = "analytics" | "reports";
 
-const RANGE_OPTIONS: { key: RangeKind; label: string }[] = [
+/**
+ * What the range selector is set to. A union rather than a kind + optional
+ * dates, so "custom with no dates" is not a state anything downstream has to
+ * defend against.
+ */
+type Selection =
+  | { kind: PresetKind }
+  | { kind: "custom"; start: string; end: string };
+
+const RANGE_OPTIONS: { key: PresetKind; label: string }[] = [
   { key: "today", label: "Today" },
   { key: "week", label: "This Week" },
   { key: "month", label: "This Month" },
 ];
+
+/** Daily Report rows shown before the owner asks for the whole range. */
+const DAILY_ROWS_COLLAPSED = 14;
 
 const SOURCE_META: { key: OrderType; label: string; icon: string }[] = [
   { key: "dine-in", label: "Dine-In", icon: "🍽️" },
@@ -71,20 +93,56 @@ function prettyDay(dayKey: string): string {
   return `${WEEKDAYS[dow]} ${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
 }
 
+/** "12 Jul – 06 Aug 2026", dropping the repeated year when both ends share it. */
+function formatRangeLabel(range: DateRange): string {
+  if (range.start === range.end) return formatDayKeyFull(range.end);
+  const sameYear = range.start.slice(0, 4) === range.end.slice(0, 4);
+  const from = sameYear
+    ? formatDayKeyShort(range.start)
+    : formatDayKeyFull(range.start);
+  return `${from} – ${formatDayKeyFull(range.end)}`;
+}
+
 export function InsightsScreen() {
   const insets = useSafeAreaInsets();
+  const { isTablet } = useResponsive();
+  // Two tiles across on a phone, three on a tablet. Fixed either way rather
+  // than derived from width: the six KPIs read as a block, and a count that
+  // shifted with the window would reshuffle that block on every rotation.
+  const kpiWidth = `${100 / (isTablet ? 3 : 2)}%` as `${number}%`;
   const [tab, setTab] = useState<Tab>("analytics");
-  const [rangeKind, setRangeKind] = useState<RangeKind>("week");
+  const [selection, setSelection] = useState<Selection>({ kind: "week" });
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Remembered so reopening the picker after a detour through the presets
+  // starts from the last custom range instead of a blank calendar.
+  const [lastCustom, setLastCustom] = useState<{
+    start: string;
+    end: string;
+  } | null>(null);
   const [showAllItems, setShowAllItems] = useState(false);
+  const [showAllDays, setShowAllDays] = useState(false);
 
   // Stable "now" so ranges only change when the day (or selection) changes.
   const now = useMemo(() => new Date(), []);
-  const range = useMemo(() => currentRange(rangeKind, now), [rangeKind, now]);
-  const prev = useMemo(() => previousRange(rangeKind, now), [rangeKind, now]);
+  const range = useMemo(
+    () =>
+      selection.kind === "custom"
+        ? rangeBetween(selection.start, selection.end)
+        : currentRange(selection.kind, now),
+    [selection, now]
+  );
+  // Derived from the range itself, so a custom span is compared against the
+  // equally-long span immediately before it.
+  const prev = useMemo(() => previousOf(range), [range]);
 
-  // One subscription covers both the current and previous periods; we slice
-  // out each period client-side from the same doc set.
-  const { data: summaries, loading, error } = useDailySummaries(prev.start);
+  // One subscription covers both the current and previous periods — they are
+  // contiguous, so a single bounded `date` query fetches exactly the days in
+  // play and nothing else. Each period is sliced out client-side.
+  const {
+    data: summaries,
+    loading,
+    error,
+  } = useDailySummaries(prev.start, range.end);
 
   const curSummaries = useMemo(
     () => summariesForKeys(summaries, range.keys),
@@ -119,9 +177,45 @@ export function InsightsScreen() {
   const payment = useMemo(() => paymentSummary(curSummaries), [curSummaries]);
   const ncByReason = useMemo(() => ncReasonSummary(curSummaries), [curSummaries]);
 
-  const rangeLabel =
-    RANGE_OPTIONS.find((o) => o.key === rangeKind)?.label ?? "";
+  const isCustom = selection.kind === "custom";
+  const rangeLabel = isCustom
+    ? formatRangeLabel(range)
+    : (RANGE_OPTIONS.find((o) => o.key === selection.kind)?.label ?? "");
+  const reportTitle = isCustom
+    ? "Custom Report"
+    : selection.kind === "today"
+      ? "Today's Report"
+      : selection.kind === "week"
+        ? "Weekly Report"
+        : "Monthly Report";
+
   const visibleItems = showAllItems ? items : items.slice(0, 5);
+  // A long range makes for a long table, so it collapses to the most recent
+  // days — the end of the range is what anyone scrolls here to read first.
+  const daysCollapsible = series.length > DAILY_ROWS_COLLAPSED;
+  const visibleDays =
+    showAllDays || !daysCollapsible
+      ? series
+      : series.slice(-DAILY_ROWS_COLLAPSED);
+
+  const selectPreset = (kind: PresetKind) => {
+    feel.select(); // Today / Week / Month are a range picker, not buttons
+    setSelection({ kind });
+    setShowAllDays(false);
+  };
+
+  const openPicker = () => {
+    feel.press(); // the date sheet comes up
+    setPickerOpen(true);
+  };
+
+  const applyCustom = (start: string, end: string) => {
+    feel.press(); // the sheet closes and the whole report re-reads
+    setSelection({ kind: "custom", start, end });
+    setLastCustom({ start, end });
+    setShowAllDays(false);
+    setPickerOpen(false);
+  };
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -141,7 +235,12 @@ export function InsightsScreen() {
             <Pressable
               key={t}
               style={[styles.segmentBtn, active && styles.segmentBtnActive]}
-              onPress={() => setTab(t)}
+              // A segmented control ticks between choices; re-tapping the
+              // segment you are already on says nothing.
+              onPress={() => {
+                if (!active) feel.select();
+                setTab(t);
+              }}
             >
               <Text
                 style={[
@@ -156,28 +255,73 @@ export function InsightsScreen() {
         })}
       </View>
 
-      {/* Date range selector */}
+      {/* Date range selector — presets plus a custom range. Scrolls
+          horizontally so the custom chip can carry the full range as its
+          label without squeezing the presets. */}
       <View style={styles.rangeRow}>
         <Text style={styles.rangeIcon}>🗓️</Text>
-        {RANGE_OPTIONS.map((o) => {
-          const active = rangeKind === o.key;
-          return (
-            <Pressable
-              key={o.key}
-              style={[styles.rangeChip, active && styles.rangeChipActive]}
-              onPress={() => setRangeKind(o.key)}
-            >
-              <Text
-                style={[
-                  styles.rangeChipText,
-                  active && styles.rangeChipTextActive,
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.rangeChips}
+        >
+          {RANGE_OPTIONS.map((o) => {
+            const active = selection.kind === o.key;
+            return (
+              <Pressable
+                key={o.key}
+                style={({ pressed }) => [
+                  styles.rangeChip,
+                  active && styles.rangeChipActive,
+                  pressed && styles.pressed,
                 ]}
+                onPress={() => selectPreset(o.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
               >
-                {o.label}
-              </Text>
-            </Pressable>
-          );
-        })}
+                <Text
+                  style={[
+                    styles.rangeChipText,
+                    active && styles.rangeChipTextActive,
+                  ]}
+                >
+                  {o.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+          <Pressable
+            style={({ pressed }) => [
+              styles.rangeChip,
+              styles.customChip,
+              isCustom && styles.rangeChipActive,
+              pressed && styles.pressed,
+            ]}
+            onPress={openPicker}
+            accessibilityRole="button"
+            accessibilityState={{ selected: isCustom }}
+            accessibilityLabel={
+              isCustom ? `Custom range, ${rangeLabel}` : "Pick a custom range"
+            }
+          >
+            <Text
+              style={[
+                styles.rangeChipText,
+                isCustom && styles.rangeChipTextActive,
+              ]}
+            >
+              {isCustom ? rangeLabel : "Custom"}
+            </Text>
+            <Text
+              style={[
+                styles.customCaret,
+                isCustom && styles.rangeChipTextActive,
+              ]}
+            >
+              ▾
+            </Text>
+          </Pressable>
+        </ScrollView>
       </View>
 
       {loading ? (
@@ -192,60 +336,74 @@ export function InsightsScreen() {
         <ScrollView
           contentContainerStyle={[
             styles.scrollContent,
+            // Wide enough for the chart to breathe, capped so the report
+            // tables don't smear a label and its number to opposite edges.
+            isTablet && styles.scrollContentWide,
             { paddingBottom: insets.bottom + space.s6 },
           ]}
           showsVerticalScrollIndicator={false}
         >
           {tab === "analytics" ? (
             <>
-              {/* KPI grid 2×2 */}
-              <View style={styles.kpiRow}>
-                <KpiCard
-                  label="Total Revenue"
-                  value={formatMoney(totals.totalRevenue)}
-                  delta={deltas.revenue}
-                />
-                <KpiCard
-                  label="Orders"
-                  value={String(totals.orderCount)}
-                  delta={deltas.orders}
-                />
-              </View>
-              <View style={styles.kpiRow}>
-                <KpiCard
-                  label="Avg Order Value"
-                  value={formatMoney(totals.avgOrderValue)}
-                  delta={deltas.aov}
-                />
+              {/* KPI tiles — one wrapping grid, 2 across on a phone and 3 on
+                  a tablet. The reading order is fixed and meaningful, so the
+                  tiles wrap rather than rearrange. */}
+              <View style={styles.kpiGrid}>
+                <View style={[styles.kpiCell, { width: kpiWidth }]}>
+                  <KpiCard
+                    label="Total Revenue"
+                    value={formatMoney(totals.totalRevenue)}
+                    delta={deltas.revenue}
+                  />
+                </View>
+                <View style={[styles.kpiCell, { width: kpiWidth }]}>
+                  <KpiCard
+                    label="Orders"
+                    value={String(totals.orderCount)}
+                    delta={deltas.orders}
+                  />
+                </View>
+                <View style={[styles.kpiCell, { width: kpiWidth }]}>
+                  <KpiCard
+                    label="Avg Order Value"
+                    value={formatMoney(totals.avgOrderValue)}
+                    delta={deltas.aov}
+                  />
+                </View>
                 {/* Revenue above is already NET of these — the cancelled sale
                     was reversed out of it. This tile is what stops a refund
                     from looking like a sale that simply never happened. */}
-                <KpiCard
-                  label="Cancelled Bills"
-                  value={
-                    totals.voidedBillCount === 0
-                      ? "0"
-                      : `${totals.voidedBillCount} · ${formatMoney(
-                          totals.voidedRevenue
-                        )}`
-                  }
-                  delta={deltas.voided}
-                />
-              </View>
-              {/* Non-chargeable sits alongside the headline numbers, not buried
-                  in a sub-report: a comp is money the restaurant chose not to
-                  take, and it should be as visible as the money it did. */}
-              <View style={styles.kpiRow}>
-                <KpiCard
-                  label="Non-Chargeable"
-                  value={formatMoney(totals.ncAmount)}
-                  delta={deltas.nc}
-                />
-                <KpiCard
-                  label="NC Bills"
-                  value={String(totals.ncCount)}
-                  delta={deltas.ncCount}
-                />
+                <View style={[styles.kpiCell, { width: kpiWidth }]}>
+                  <KpiCard
+                    label="Cancelled Bills"
+                    value={
+                      totals.voidedBillCount === 0
+                        ? "0"
+                        : `${totals.voidedBillCount} · ${formatMoney(
+                            totals.voidedRevenue
+                          )}`
+                    }
+                    delta={deltas.voided}
+                  />
+                </View>
+                {/* Non-chargeable sits alongside the headline numbers, not
+                    buried in a sub-report: a comp is money the restaurant
+                    chose not to take, and it should be as visible as the
+                    money it did. */}
+                <View style={[styles.kpiCell, { width: kpiWidth }]}>
+                  <KpiCard
+                    label="Non-Chargeable"
+                    value={formatMoney(totals.ncAmount)}
+                    delta={deltas.nc}
+                  />
+                </View>
+                <View style={[styles.kpiCell, { width: kpiWidth }]}>
+                  <KpiCard
+                    label="NC Bills"
+                    value={String(totals.ncCount)}
+                    delta={deltas.ncCount}
+                  />
+                </View>
               </View>
 
               {/* Revenue Over Time */}
@@ -260,7 +418,10 @@ export function InsightsScreen() {
                 <View style={styles.cardHeaderRow}>
                   <Text style={styles.cardTitle}>Top Selling Items</Text>
                   {items.length > 5 && (
-                    <Pressable onPress={() => setShowAllItems((v) => !v)}>
+                    <Pressable
+                      onPress={() => setShowAllItems((v) => !v)}
+                      onPressIn={feel.tap}
+                    >
                       <Text style={styles.link}>
                         {showAllItems ? "Show Less" : "View All"}
                       </Text>
@@ -302,18 +463,8 @@ export function InsightsScreen() {
             <>
               {/* Reports: range summary */}
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>
-                  {rangeKind === "today"
-                    ? "Today's Report"
-                    : rangeKind === "week"
-                    ? "Weekly Report"
-                    : "Monthly Report"}
-                </Text>
-                <Text style={styles.cardCaption}>
-                  {range.start === range.end
-                    ? range.start
-                    : `${range.start} → ${range.end}`}
-                </Text>
+                <Text style={styles.cardTitle}>{reportTitle}</Text>
+                <Text style={styles.cardCaption}>{formatRangeLabel(range)}</Text>
                 <View style={styles.summaryGrid}>
                   <SummaryStat
                     label="Revenue"
@@ -344,16 +495,35 @@ export function InsightsScreen() {
 
               {/* Daily report */}
               <View style={styles.card}>
-                <Text style={styles.cardTitle}>Daily Report</Text>
+                <View style={styles.cardHeaderRow}>
+                  <Text style={styles.cardTitle}>Daily Report</Text>
+                  {daysCollapsible && (
+                    <Pressable
+                      onPress={() => setShowAllDays((v) => !v)}
+                      onPressIn={feel.tap}
+                    >
+                      <Text style={styles.link}>
+                        {showAllDays
+                          ? "Show Less"
+                          : `View all ${series.length} days`}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+                {daysCollapsible && !showAllDays && (
+                  <Text style={styles.cardCaption}>
+                    Most recent {DAILY_ROWS_COLLAPSED} days
+                  </Text>
+                )}
                 <View style={styles.tableHeader}>
                   <Text style={[styles.th, styles.thDay]}>Day</Text>
                   <Text style={[styles.th, styles.thNum]}>Orders</Text>
                   <Text style={[styles.th, styles.thMoney]}>Revenue</Text>
                 </View>
-                {series.length === 0 ? (
+                {visibleDays.length === 0 ? (
                   <Text style={styles.emptyText}>No data.</Text>
                 ) : (
-                  series.map((p) => {
+                  visibleDays.map((p) => {
                     const day = curSummaries.find((s) => s.date === p.date);
                     return (
                       <View key={p.date} style={styles.tableRow}>
@@ -446,6 +616,22 @@ export function InsightsScreen() {
           )}
         </ScrollView>
       )}
+
+      {pickerOpen && (
+        <DateRangeSheet
+          initialStart={
+            selection.kind === "custom" ? selection.start : lastCustom?.start
+          }
+          initialEnd={
+            selection.kind === "custom" ? selection.end : lastCustom?.end
+          }
+          onClose={() => {
+            feel.dismiss();
+            setPickerOpen(false);
+          }}
+          onApply={applyCustom}
+        />
+      )}
     </View>
   );
 }
@@ -481,6 +667,9 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: 2,
   },
+  pressed: {
+    opacity: 0.7,
+  },
   segment: {
     flexDirection: "row",
     marginHorizontal: space.s4,
@@ -510,11 +699,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: space.s2,
-    paddingHorizontal: space.s4,
+    paddingLeft: space.s4,
     paddingVertical: space.s3,
   },
   rangeIcon: {
     fontSize: 16,
+  },
+  rangeChips: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s2,
+    paddingRight: space.s4,
   },
   rangeChip: {
     paddingHorizontal: space.s3,
@@ -536,11 +731,22 @@ const styles = StyleSheet.create({
   rangeChipTextActive: {
     color: colors.textInverse,
   },
+  customChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s1,
+  },
+  customCaret: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textMuted,
+  },
   scrollContent: {
     paddingHorizontal: space.s4,
     paddingTop: space.s1,
     gap: space.s3,
   },
+  scrollContentWide: { width: "100%", maxWidth: 1000, alignSelf: "center" },
   center: {
     flex: 1,
     alignItems: "center",
@@ -552,9 +758,20 @@ const styles = StyleSheet.create({
     color: colors.danger,
     textAlign: "center",
   },
-  kpiRow: {
+  // Negative margin + per-cell padding rather than `gap`: percentage widths
+  // and a gap fight each other and overflow the row.
+  kpiGrid: {
     flexDirection: "row",
-    gap: space.s3,
+    flexWrap: "wrap",
+    marginHorizontal: -space.s2,
+    // Cancel the last row's cell margin so the grid's spacing to the chart
+    // below is the scroll container's `gap`, same as every other block.
+    marginBottom: -space.s3,
+  },
+  kpiCell: {
+    // Width is set per-render from the window — see `kpiWidth`.
+    paddingHorizontal: space.s2,
+    marginBottom: space.s3,
   },
   card: {
     backgroundColor: colors.surface,

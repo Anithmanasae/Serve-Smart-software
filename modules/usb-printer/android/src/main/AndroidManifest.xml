@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!--
+    USB host (OTG) is how a phone/tablet drives a printer over the C-type cable.
+    required="false" on purpose: devices without OTG must still be able to
+    install the app and print over Bluetooth. Merged into the app manifest at
+    build time, so no config plugin is needed for it.
+  -->
+  <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+</manifest>

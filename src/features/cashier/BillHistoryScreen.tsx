@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { formatMoney } from "@/lib/money";
 import { dayKey, formatTimeIST } from "@/lib/date";
+import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import {
   NC_REASON_LABELS,
@@ -94,6 +95,7 @@ export function BillHistoryScreen() {
         <Pressable
           style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
           onPress={() => router.back()}
+          onPressIn={feel.dismiss}
           hitSlop={8}
         >
           <Text style={styles.backBtnText}>‹ Back</Text>
@@ -130,6 +132,7 @@ export function BillHistoryScreen() {
           <Pressable
             style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
             onPress={() => setSelectedBillId(item.id)}
+            onPressIn={feel.press}
           >
             <View style={styles.cardTop}>
               <Text style={styles.cardTitleText}>{item.tableLabel}</Text>

@@ -14,6 +14,7 @@
 import { memo, useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { formatMoney } from "@/lib/money";
+import { feel } from "@/lib/feedback";
 import { PressableScale } from "@/components/PressableScale";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import type { KotItemStatus, OrderItem } from "@/types/models";
@@ -45,6 +46,9 @@ function OrderLineRowImpl({ line, onQty, onNotes }: OrderLineRowProps) {
   }, [line.notes]);
 
   const savedNote = (line.notes ?? "").trim();
+  const gross = line.price * line.qty;
+  const discount = line.offerDiscount ?? 0;
+  const discounted = discount > 0;
 
   return (
     <View style={styles.row}>
@@ -58,7 +62,10 @@ function OrderLineRowImpl({ line, onQty, onNotes }: OrderLineRowProps) {
             {editable && !notesOpen ? (
               <Pressable
                 hitSlop={8}
-                onPress={() => setNotesOpen(true)}
+                onPress={() => {
+                  feel.tap();
+                  setNotesOpen(true);
+                }}
                 style={styles.noteToggle}
               >
                 {savedNote ? (
@@ -80,9 +87,12 @@ function OrderLineRowImpl({ line, onQty, onNotes }: OrderLineRowProps) {
 
         {editable ? (
           <View style={styles.stepper}>
+            {/* Taking the last unit off removes the row, so that press gets
+                the softer "gone" feel rather than another identical tap. */}
             <PressableScale
               hitSlop={8}
               style={styles.stepBtn}
+              haptic={line.qty === 1 ? "dismiss" : "tap"}
               onPress={() => onQty(line.qty - 1)}
             >
               <Text style={styles.stepGlyph}>−</Text>
@@ -104,10 +114,30 @@ function OrderLineRowImpl({ line, onQty, onNotes }: OrderLineRowProps) {
           </View>
         )}
 
-        <Text style={styles.lineTotal}>
-          {formatMoney(line.price * line.qty)}
-        </Text>
+        {/* The full price stays visible above the discounted one. A struck
+            figure is what makes a saving legible — replacing the number
+            outright would leave the guest nothing to compare against. */}
+        {discounted ? (
+          <View style={styles.totalCol}>
+            <Text style={styles.lineTotalStruck}>{formatMoney(gross)}</Text>
+            <Text style={styles.lineTotalOffer}>
+              {formatMoney(Math.max(0, gross - discount))}
+            </Text>
+          </View>
+        ) : (
+          <Text style={styles.lineTotal}>{formatMoney(gross)}</Text>
+        )}
       </View>
+
+      {/* Which offer did this, and what it was worth. */}
+      {discounted ? (
+        <View style={styles.offerRow}>
+          <Text style={styles.offerName} numberOfLines={1}>
+            🏷 {line.offerName ?? "Offer"}
+          </Text>
+          <Text style={styles.offerSaving}>−{formatMoney(discount)}</Text>
+        </View>
+      ) : null}
 
       {editable && notesOpen ? (
         <TextInput
@@ -220,6 +250,42 @@ const styles = StyleSheet.create({
     color: colors.text,
     minWidth: 68,
     textAlign: "right",
+  },
+  totalCol: {
+    minWidth: 68,
+    alignItems: "flex-end",
+  },
+  lineTotalStruck: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    color: colors.textMuted,
+    textDecorationLine: "line-through",
+  },
+  lineTotalOffer: {
+    fontFamily: fonts.bold,
+    fontSize: 14,
+    color: colors.saveGreen,
+  },
+  offerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: space.s2,
+    backgroundColor: colors.saveGreenSoft,
+    borderRadius: radius.sm,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s1,
+  },
+  offerName: {
+    flexShrink: 1,
+    fontFamily: fonts.bold,
+    fontSize: 12,
+    color: colors.saveGreen,
+  },
+  offerSaving: {
+    fontFamily: fonts.extrabold,
+    fontSize: 12,
+    color: colors.saveGreen,
   },
   notesInput: {
     borderWidth: 1,

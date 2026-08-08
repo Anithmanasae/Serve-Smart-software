@@ -35,8 +35,9 @@ import {
   View,
 } from "react-native";
 import { formatMoney } from "@/lib/money";
+import { useResponsive } from "@/lib/responsive";
 import { dayKey, formatTimeIST } from "@/lib/date";
-import { successFeedback, tapFeedback } from "@/lib/feedback";
+import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import {
   NC_REASONS,
@@ -80,6 +81,7 @@ export function BillDetail({
   billId: string;
   onClose: () => void;
 }) {
+  const { isTablet } = useResponsive();
   const { data: bill, loading: billLoading } = useBill(billId);
   const { data: order } = useOrder(bill?.orderId ?? null);
   const { data: restaurant } = useRestaurantProfile();
@@ -156,6 +158,7 @@ export function BillDetail({
     try {
       await fn();
     } catch (e) {
+      feel.error();
       Alert.alert("Action failed", e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
@@ -171,9 +174,13 @@ export function BillDetail({
         ? ({ kind: "paid", mode: selectedMode } as const)
         : null;
     if (!settlement) return;
-    tapFeedback();
+    feel.press();
     void run("settle", async () => {
       await settleBill(bill, order, settlement);
+      // Taking payment is the end of the whole flow and the sheet closes
+      // straight after, so the confirm is the only acknowledgement the
+      // cashier gets that the money actually landed.
+      feel.success();
       onClose();
     });
   }
@@ -181,7 +188,7 @@ export function BillDetail({
   /** Open the reason sheet, seeded with whatever was picked before. */
   function onPickNc() {
     if (isPaid || busy) return;
-    tapFeedback();
+    feel.press(); // the reason sheet comes up
     setNcDraftReason(ncSel?.reason ?? null);
     setNcDraftNote(ncSel?.note ?? "");
     setNcOpen(true);
@@ -191,7 +198,7 @@ export function BillDetail({
    *  meal left the building for free, so the button stays dead without one. */
   function onConfirmNc() {
     if (!ncDraftReason) return;
-    tapFeedback();
+    feel.tap(); // a choice recorded, not money moved — settle still has to run
     setNcSel({ reason: ncDraftReason, note: ncDraftNote.trim().slice(0, 140) });
     setSelectedMode(null); // a comp is not a payment method
     setNcOpen(false);
@@ -199,7 +206,7 @@ export function BillDetail({
 
   /** Back out of a comp that hasn't been settled yet. */
   function onClearNc() {
-    tapFeedback();
+    feel.dismiss();
     setNcSel(null);
     setNcOpen(false);
   }
@@ -207,7 +214,7 @@ export function BillDetail({
   /** Open the cancel-reason sheet on a settled bill. */
   function onPickVoid() {
     if (!canVoid || busy) return;
-    tapFeedback();
+    feel.press();
     setVoidDraftReason(null);
     setVoidDraftNote("");
     setVoidOpen(true);
@@ -222,7 +229,9 @@ export function BillDetail({
     if (!bill || !voidDraftReason || !cashierProfile) return;
     const reason = voidDraftReason;
     const note = voidDraftNote.trim().slice(0, 140);
-    tapFeedback();
+    // Caution, not confirmation: the next thing on screen is the last stop
+    // before money comes back out of the day's takings.
+    feel.warn();
     setVoidOpen(false);
     Alert.alert(
       "Cancel this bill?",
@@ -235,7 +244,9 @@ export function BillDetail({
           onPress: () => {
             void run("void", async () => {
               await voidBill(bill, cashierProfile.uid, reason, note);
-              successFeedback();
+              // A solid thud rather than the settle's confirm: the sale is
+              // reversed, which is done — but it is not good news.
+              feel.heavy();
               onClose();
             });
           },
@@ -253,10 +264,11 @@ export function BillDetail({
   function onPrint() {
     if (!bill || !order || busy) return;
     if (!isPrintingAvailable()) {
+      feel.error();
       Alert.alert("Printing unavailable", PRINTING_UNAVAILABLE_MESSAGE);
       return;
     }
-    tapFeedback();
+    feel.tap();
     setBusy("print");
     setJustPrinted(false);
     void (async () => {
@@ -279,8 +291,12 @@ export function BillDetail({
         });
         await printToSavedPrinter(receipt.bytes);
         await reprintBill(bill.id, bill.printedCount);
+        // The paper is out of the printer before this lands — the confirm is
+        // what tells a cashier facing the customer that it worked.
+        feel.success();
         setJustPrinted(true);
       } catch (e) {
+        feel.error();
         Alert.alert(
           "Couldn't print",
           (e instanceof Error ? e.message : String(e)) +
@@ -303,13 +319,14 @@ export function BillDetail({
     const raw = waPhone.trim();
     const phone = raw ? normalizeIndianMobile(raw) : null;
     if (raw && !phone) {
+      feel.error(); // a rejected number should feel rejected
       Alert.alert(
         "Invalid number",
         "Enter the customer's 10-digit mobile number, or leave it blank to pick the contact inside WhatsApp."
       );
       return;
     }
-    tapFeedback();
+    feel.press(); // handing off to another app
     const text = encodeURIComponent(
       formatWhatsAppReceipt({
         profile: restaurant ?? { name: "Smart Serve" },
@@ -334,6 +351,7 @@ export function BillDetail({
         try {
           await Linking.openURL(`https://wa.me/${phone ?? ""}?text=${text}`);
         } catch {
+          feel.error();
           Alert.alert(
             "Couldn't open WhatsApp",
             "Install WhatsApp on this device to send bills."
@@ -374,13 +392,21 @@ export function BillDetail({
         <Pressable
           style={({ pressed }) => [styles.closeBtn, pressed && styles.pressed]}
           onPress={onClose}
+          onPressIn={feel.dismiss}
           hitSlop={8}
         >
           <Text style={styles.closeBtnText}>Close</Text>
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.body,
+          // A receipt is a narrow document. Stretched across a tablet the
+          // item names and their amounts stop reading as pairs.
+          isTablet && styles.bodyReadingWidth,
+        ]}
+      >
         {/* ── Items ───────────────────────────────────────────────────────── */}
         {order && (
           <View style={styles.card}>
@@ -388,13 +414,27 @@ export function BillDetail({
             {order.items
               .filter((i) => !i.voided)
               .map((i) => (
-                <View style={styles.row} key={i.lineId}>
-                  <Text style={styles.itemName} numberOfLines={1}>
-                    {i.name} <Text style={styles.itemQty}>× {i.qty}</Text>
-                  </Text>
-                  <Text style={styles.rowValue}>
-                    {formatMoney(i.price * i.qty)}
-                  </Text>
+                <View key={i.lineId}>
+                  <View style={styles.row}>
+                    <Text style={styles.itemName} numberOfLines={1}>
+                      {i.name} <Text style={styles.itemQty}>× {i.qty}</Text>
+                    </Text>
+                    <Text style={styles.rowValue}>
+                      {formatMoney(i.price * i.qty)}
+                    </Text>
+                  </View>
+                  {/* Named under the line it discounted, so a guest querying
+                      the total can see exactly where the money came off. */}
+                  {(i.offerDiscount ?? 0) > 0 ? (
+                    <View style={styles.row}>
+                      <Text style={styles.offerLine} numberOfLines={1}>
+                        🏷 {i.offerName ?? "Offer"}
+                      </Text>
+                      <Text style={styles.offerValue}>
+                        −{formatMoney(i.offerDiscount ?? 0)}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
               ))}
             <View style={styles.divider} />
@@ -410,6 +450,17 @@ export function BillDetail({
           <Text style={styles.cardTitle}>Summary</Text>
 
           <Row label="Subtotal" value={formatMoney(bill.subtotal)} />
+
+          {/* Offers come off before tax, so the row sits above GST — the order
+              on screen is the order of the arithmetic. */}
+          {(bill.offerDiscount ?? 0) > 0 && (
+            <View style={styles.row}>
+              <Text style={styles.offerTotalLabel}>Offer savings</Text>
+              <Text style={styles.offerTotalValue}>
+                −{formatMoney(bill.offerDiscount ?? 0)}
+              </Text>
+            </View>
+          )}
 
           {/* Bills created with the GST switch off carry zero tax — omit the row. */}
           {bill.gstTotal > 0 && (
@@ -464,6 +515,9 @@ export function BillDetail({
                   ]}
                   onPress={() => {
                     if (isSettled) return;
+                    // Picking how the guest pays is choosing between options;
+                    // the commit is the Settle button underneath.
+                    if (!active) feel.select();
                     setSelectedMode(t.mode);
                     setNcSel(null); // picking a payment undoes a pending comp
                   }}
@@ -539,7 +593,7 @@ export function BillDetail({
             <Pressable
               style={({ pressed }) => [styles.tile, pressed && styles.pressed]}
               onPress={() => {
-                tapFeedback();
+                feel.press();
                 setWaPhone("");
                 setWaOpen(true);
               }}
@@ -638,7 +692,10 @@ export function BillDetail({
         visible={waOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setWaOpen(false)}
+        onRequestClose={() => {
+          feel.dismiss();
+          setWaOpen(false);
+        }}
       >
         <View style={styles.waOverlay}>
           <View style={styles.waSheet}>
@@ -664,7 +721,10 @@ export function BillDetail({
                   styles.waBtnGhost,
                   pressed && styles.pressed,
                 ]}
-                onPress={() => setWaOpen(false)}
+                onPress={() => {
+                  feel.dismiss();
+                  setWaOpen(false);
+                }}
               >
                 <Text style={styles.waBtnGhostText}>Cancel</Text>
               </Pressable>
@@ -688,7 +748,10 @@ export function BillDetail({
         visible={ncOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setNcOpen(false)}
+        onRequestClose={() => {
+          feel.dismiss();
+          setNcOpen(false);
+        }}
       >
         <View style={styles.waOverlay}>
           <View style={styles.waSheet}>
@@ -709,7 +772,10 @@ export function BillDetail({
                       active && styles.ncChipActive,
                       pressed && styles.pressed,
                     ]}
-                    onPress={() => setNcDraftReason(r)}
+                    onPress={() => {
+                      if (!active) feel.select();
+                      setNcDraftReason(r);
+                    }}
                   >
                     <Text
                       style={[
@@ -740,7 +806,14 @@ export function BillDetail({
                   styles.waBtnGhost,
                   pressed && styles.pressed,
                 ]}
-                onPress={ncSel ? onClearNc : () => setNcOpen(false)}
+                onPress={
+                  ncSel
+                    ? onClearNc
+                    : () => {
+                        feel.dismiss();
+                        setNcOpen(false);
+                      }
+                }
               >
                 <Text style={styles.waBtnGhostText}>
                   {ncSel ? "Remove NC" : "Cancel"}
@@ -768,7 +841,10 @@ export function BillDetail({
         visible={voidOpen}
         transparent
         animationType="fade"
-        onRequestClose={() => setVoidOpen(false)}
+        onRequestClose={() => {
+          feel.dismiss();
+          setVoidOpen(false);
+        }}
       >
         <View style={styles.waOverlay}>
           <View style={styles.waSheet}>
@@ -790,7 +866,10 @@ export function BillDetail({
                       active && styles.voidChipActive,
                       pressed && styles.pressed,
                     ]}
-                    onPress={() => setVoidDraftReason(r)}
+                    onPress={() => {
+                      if (!active) feel.select();
+                      setVoidDraftReason(r);
+                    }}
                   >
                     <Text
                       style={[
@@ -821,7 +900,10 @@ export function BillDetail({
                   styles.waBtnGhost,
                   pressed && styles.pressed,
                 ]}
-                onPress={() => setVoidOpen(false)}
+                onPress={() => {
+                  feel.dismiss();
+                  setVoidOpen(false);
+                }}
               >
                 <Text style={styles.waBtnGhostText}>Keep bill</Text>
               </Pressable>
@@ -889,6 +971,7 @@ const styles = StyleSheet.create({
   closeBtnText: { fontSize: 14, fontWeight: "600", color: colors.text },
 
   body: { padding: space.s4, paddingBottom: space.s6, gap: space.s4 },
+  bodyReadingWidth: { width: "100%", maxWidth: 720, alignSelf: "center" },
 
   card: {
     backgroundColor: colors.surface,
@@ -917,6 +1000,17 @@ const styles = StyleSheet.create({
   rowValue: { fontSize: 15, fontWeight: "600", color: colors.text },
   itemName: { flex: 1, fontSize: 15, color: colors.text, marginRight: space.s3 },
   itemQty: { color: colors.textMuted, fontWeight: "600" },
+  offerLine: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.saveGreen,
+    marginRight: space.s3,
+    paddingLeft: space.s3,
+  },
+  offerValue: { fontSize: 13, fontWeight: "700", color: colors.saveGreen },
+  offerTotalLabel: { fontSize: 15, fontWeight: "600", color: colors.saveGreen },
+  offerTotalValue: { fontSize: 15, fontWeight: "700", color: colors.saveGreen },
 
   divider: {
     height: 1,

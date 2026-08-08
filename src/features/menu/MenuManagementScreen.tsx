@@ -17,6 +17,8 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { feel, feelToggle } from "@/lib/feedback";
+import { gridColumns, useResponsive } from "@/lib/responsive";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { deleteMenuItem, setMenuItemEnabled } from "./menuApi";
 import { useMenuCategories, useMenuItems } from "./useMenuData";
@@ -32,6 +34,10 @@ export const MAX_MENU_ITEMS = 1000;
 
 export function MenuManagementScreen() {
   const insets = useSafeAreaInsets();
+  // The grid is plain flex-wrap, so widening it is just a narrower cell — no
+  // remount needed, and a short last row still keeps its card widths.
+  const { width } = useResponsive();
+  const cellWidth = `${100 / gridColumns(width, 240, 5)}%` as `${number}%`;
   const categoriesState = useMenuCategories();
   const itemsState = useMenuItems();
 
@@ -94,12 +100,14 @@ export function MenuManagementScreen() {
 
   const openAdd = () => {
     if (atCapacity) {
+      feel.error(); // a refusal, not a dead button
       Alert.alert(
         "Menu is full",
         `The menu can hold up to ${MAX_MENU_ITEMS} items. Delete an item before adding a new one.`
       );
       return;
     }
+    feel.press(); // the form takes over the screen
     setEditingItem(null);
     setFormCategoryId(
       activeCategory !== ALL ? activeCategory : enabledCategories[0]?.id
@@ -108,6 +116,7 @@ export function MenuManagementScreen() {
   };
 
   const openEdit = (item: MenuItemDoc) => {
+    feel.press();
     setEditingItem(item);
     setFormCategoryId(undefined);
     setFormVisible(true);
@@ -120,18 +129,25 @@ export function MenuManagementScreen() {
         text: "Delete",
         style: "destructive",
         onPress: () => {
-          deleteMenuItem(item.id).catch((e) =>
-            Alert.alert("Error", e instanceof Error ? e.message : "Failed.")
-          );
+          deleteMenuItem(item.id)
+            .then(() => feel.heavy()) // gone for good
+            .catch((e) => {
+              feel.error();
+              Alert.alert("Error", e instanceof Error ? e.message : "Failed.");
+            });
         },
       },
     ]);
   };
 
   const toggleEnabled = (item: MenuItemDoc, enabled: boolean) => {
-    setMenuItemEnabled(item.id, enabled).catch((e) =>
-      Alert.alert("Error", e instanceof Error ? e.message : "Failed.")
-    );
+    // Hiding a dish and putting it back on sale are opposite acts; the switch
+    // says which way it went without the owner checking the label.
+    feelToggle(enabled);
+    setMenuItemEnabled(item.id, enabled).catch((e) => {
+      feel.error();
+      Alert.alert("Error", e instanceof Error ? e.message : "Failed.");
+    });
   };
 
   const loading = categoriesState.loading || itemsState.loading;
@@ -151,7 +167,10 @@ export function MenuManagementScreen() {
         </View>
         <Pressable
           style={({ pressed }) => [styles.manageBtn, pressed && styles.pressed]}
-          onPress={() => setCategoryManagerVisible(true)}
+          onPress={() => {
+            feel.press();
+            setCategoryManagerVisible(true);
+          }}
         >
           <Text style={styles.manageBtnText}>Categories</Text>
         </Pressable>
@@ -183,7 +202,10 @@ export function MenuManagementScreen() {
               activeCategory === ALL && styles.chipActive,
               pressed && styles.pressed,
             ]}
-            onPress={() => setActiveCategory(ALL)}
+            onPress={() => {
+              if (activeCategory !== ALL) feel.select();
+              setActiveCategory(ALL);
+            }}
           >
             <Text
               style={[
@@ -204,7 +226,10 @@ export function MenuManagementScreen() {
                   active && styles.chipActive,
                   pressed && styles.pressed,
                 ]}
-                onPress={() => setActiveCategory(c.id)}
+                onPress={() => {
+                  if (!active) feel.select();
+                  setActiveCategory(c.id);
+                }}
               >
                 <Text
                   style={[styles.chipText, active && styles.chipTextActive]}
@@ -248,7 +273,10 @@ export function MenuManagementScreen() {
                 </Text>
                 <View style={styles.grid}>
                   {section.items.map((item) => (
-                    <View key={item.id} style={styles.gridCell}>
+                    <View
+                      key={item.id}
+                      style={[styles.gridCell, { width: cellWidth }]}
+                    >
                       <MenuItemCard
                         item={item}
                         onEdit={openEdit}
@@ -406,7 +434,7 @@ const styles = StyleSheet.create({
     marginHorizontal: -space.s2,
   },
   gridCell: {
-    width: "50%",
+    // Width is set per-render from the window — see `cellWidth`.
     paddingHorizontal: space.s2,
     marginBottom: space.s3,
   },

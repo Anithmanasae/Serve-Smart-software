@@ -1,7 +1,17 @@
 /**
  * A Pressable that springs its content down to a smaller scale while held, for
- * tactile buttons (steppers, CTAs). Presentation only — it forwards the press
- * to `onPress`; callers own any haptics/logic.
+ * tactile buttons (steppers, CTAs).
+ *
+ * The haptic fires on **touch-down**, together with the scale spring, not
+ * after `onPress` has run. That pairing is the whole trick: the finger is
+ * still moving, so the pulse reads as the button giving way under it rather
+ * than as a delayed report that something happened. Firing it from the
+ * handler instead puts the pulse behind a re-render (and sometimes behind a
+ * network write), which is exactly what makes a haptic layer feel bolted on.
+ *
+ * Buttons that *open* something should say so — `haptic="press"` for a sheet
+ * or a screen, `haptic="select"` for a chip or tab, `haptic={false}` where the
+ * caller plays a more specific feel itself.
  */
 import { type ReactNode, useCallback, useRef } from "react";
 import {
@@ -11,18 +21,22 @@ import {
   type StyleProp,
   type ViewStyle,
 } from "react-native";
+import { feel } from "@/lib/feedback";
 
 interface PressableScaleProps extends Omit<PressableProps, "style" | "children"> {
   /** Style applied to the animated inner view (the visible surface). */
   style?: StyleProp<ViewStyle>;
   /** Scale to spring to while pressed (default 0.9). */
   activeScale?: number;
+  /** Feel played on touch-down; `false` to stay silent. Default `"tap"`. */
+  haptic?: keyof typeof feel | false;
   children?: ReactNode;
 }
 
 export function PressableScale({
   style,
   activeScale = 0.9,
+  haptic = "tap",
   onPressIn,
   onPressOut,
   children,
@@ -44,6 +58,7 @@ export function PressableScale({
     <Pressable
       onPressIn={(e) => {
         spring(activeScale);
+        if (haptic) feel[haptic]();
         onPressIn?.(e);
       }}
       onPressOut={(e) => {

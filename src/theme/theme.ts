@@ -50,6 +50,17 @@ export const colors = {
   ncAmber: "#B45309",
   ncAmberSoft: "#fdf3e3",
   ncAmberBorder: "#e8c88a",
+
+  // OFFERS. Every control on the offers screens — buttons, chips, switches,
+  // the FAB — uses the app's navy `primary`, so the feature reads as part of
+  // Smart Serve rather than a bolt-on. Only the SAVING gets its own colour:
+  // green, which this palette already means "free" with, and which is the one
+  // number on the bill the guest is actually looking for.
+  offerSoft: "#e6eefb", // tint behind offer chips/badges (= primarySoft)
+  offerBorder: "#c9dcf7", // navy-tinted hairline for those surfaces
+  saveGreen: "#0f7a4f", // the discount amount itself
+  saveGreenSoft: "#e3f6ec",
+  saveGreenBorder: "#b9e3cd",
 } as const;
 
 /** 4px spacing scale. */

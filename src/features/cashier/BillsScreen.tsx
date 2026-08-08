@@ -23,6 +23,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatMoney } from "@/lib/money";
+import { useResponsive } from "@/lib/responsive";
+import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import type { Bill, Order, Table } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -59,6 +61,7 @@ function timeAgo(fromMs: number, nowMs: number): string {
 
 export function BillsScreen() {
   const insets = useSafeAreaInsets();
+  const { isTablet } = useResponsive();
   const { profile, firebaseUser, role } = useAuth();
   const cashierUid = profile?.uid ?? firebaseUser?.uid ?? "";
   const cashierName = profile?.name ?? "Cashier";
@@ -121,8 +124,10 @@ export function BillsScreen() {
         orderLabel(order),
         gstEnabled
       );
+      feel.success(); // the bill exists; the settle sheet opens on top
       setSelectedBillId(billId);
     } catch (e) {
+      feel.error();
       Alert.alert("Could not bill", e instanceof Error ? e.message : String(e));
     } finally {
       setGeneratingId(null);
@@ -159,6 +164,10 @@ export function BillsScreen() {
         stickySectionHeadersEnabled={false}
         contentContainerStyle={[
           styles.list,
+          // Bills are a chronological ledger, so they stay one column and get
+          // a reading width instead: a card stretched across a tablet puts the
+          // table label and the amount too far apart to pair by eye.
+          isTablet && styles.listReadingWidth,
           { paddingBottom: insets.bottom + space.s6 },
         ]}
         renderSectionHeader={({ section }) => (
@@ -244,6 +253,7 @@ function BillCard({
     <Pressable
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       onPress={onPress}
+      onPressIn={feel.press} // the bill sheet is about to open
     >
       <View style={styles.cardTop}>
         <Text style={styles.cardTitleText}>{bill.tableLabel}</Text>
@@ -285,6 +295,7 @@ function OrderCard({
         pressed && styles.cardPressed,
       ]}
       onPress={onPress}
+      onPressIn={feel.press}
       disabled={disabled}
     >
       <View style={styles.cardTop}>
@@ -365,6 +376,7 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 14, color: colors.textMuted, marginTop: 2 },
 
   list: { paddingHorizontal: space.s4 },
+  listReadingWidth: { width: "100%", maxWidth: 760, alignSelf: "center" },
   sectionHeader: {
     fontSize: 13,
     fontWeight: "700",

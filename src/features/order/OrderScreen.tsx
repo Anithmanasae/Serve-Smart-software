@@ -32,12 +32,10 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
 import { formatMoney } from "@/lib/money";
-import {
-  animateNextLayout,
-  mediumTapFeedback,
-  successFeedback,
-  tapFeedback,
-} from "@/lib/feedback";
+import { isOfferLive } from "@/lib/offers";
+import { gridColumns, useResponsive } from "@/lib/responsive";
+import { useOffers } from "@/features/offers/useOffersData";
+import { animateNextLayout, feel } from "@/lib/feedback";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -73,14 +71,29 @@ import {
   useTable,
 } from "./useOrderData";
 import { OrderMenuCard } from "./OrderMenuCard";
-import { OrderLineRow } from "./OrderLineRow";
+import { OrderCartPanel } from "./OrderCartPanel";
+import { ALL_CATEGORIES, OrderCategoryRail } from "./OrderCategoryRail";
 import { KotAlertBanner, useKotStatusAlerts } from "./kotAlerts";
 
-const ALL = "__all__";
+const ALL = ALL_CATEGORIES;
 const SPACER = "__spacer__";
 
 type MenuItemDoc = MenuItem & { id: string };
-type GridEntry = MenuItemDoc | { id: typeof SPACER };
+type GridEntry = MenuItemDoc | { id: string };
+
+/**
+ * Widths of the two fixed rails in the tablet layout, from the window width.
+ *
+ * Both scale rather than switch, so portrait and landscape are the same
+ * three-pane layout breathing instead of two designs to keep in step. The
+ * centre grid gets whatever is left, and re-flows its columns to suit.
+ */
+function tabletPanes(width: number) {
+  const rail = width >= 1100 ? 200 : width >= 900 ? 176 : 152;
+  const cart =
+    width >= 1280 ? 380 : width >= 1100 ? 344 : width >= 900 ? 312 : 288;
+  return { rail, cart };
+}
 
 /** Map a kitchen ticket status onto the matching per-line lifecycle status. */
 function kotToLineStatus(status: KotStatus): KotItemStatus {
@@ -98,6 +111,9 @@ function kotToLineStatus(status: KotStatus): KotItemStatus {
 
 export function OrderScreen({ tableId }: { tableId?: string }) {
   const insets = useSafeAreaInsets();
+  // Re-reads on every rotation, so the three-pane layout re-measures itself
+  // instead of keeping the widths it was born with.
+  const { width, isTablet } = useResponsive();
   const { profile, role } = useAuth();
   const { gstEnabled } = useSettings();
   const { data: restaurant } = useRestaurantProfile();
@@ -113,8 +129,13 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   // ── Live data ───────────────────────────────────────────────────────────
   const categoriesState = useMenuCategories();
   const itemsState = useMenuItems();
+  const offersState = useOffers();
   const tableState = useTable(tableId ?? null);
   const openOrderState = useOpenOrderForTable(tableId ?? null);
+
+  // Live subscription, not a one-shot read: the owner switching a promo on
+  // mid-service has to reach the floor without anyone reloading anything.
+  const offers = offersState.data;
 
   // Takeaway orders have no table pointer, so we remember the id the first add
   // mints and subscribe to it directly.
@@ -181,13 +202,39 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     });
   }, [itemsState.data, activeCategory, search]);
 
-  // Pad to an even count so a lone trailing card doesn't stretch full-width.
-  const gridData: GridEntry[] = useMemo(
-    () =>
-      filteredItems.length % 2 === 1
-        ? [...filteredItems, { id: SPACER }]
-        : filteredItems,
-    [filteredItems]
+  // ── Layout ──────────────────────────────────────────────────────────────
+  // Phone: one column of cards two-up under a chip row. Tablet: categories |
+  // grid | order, with the grid re-flowing into whatever is left over.
+  const panes = tabletPanes(width);
+  const numColumns = isTablet
+    ? gridColumns(width - panes.rail - panes.cart - space.s4 * 2)
+    : 2;
+
+  // Pad to a whole number of rows so a lone trailing card doesn't stretch to
+  // fill the row it landed in.
+  const gridData: GridEntry[] = useMemo(() => {
+    const remainder = filteredItems.length % numColumns;
+    if (remainder === 0) return filteredItems;
+    const padded: GridEntry[] = [...filteredItems];
+    for (let i = remainder; i < numColumns; i += 1) {
+      padded.push({ id: `${SPACER}${i}` });
+    }
+    return padded;
+  }, [filteredItems, numColumns]);
+
+  // Enabled-item counts for the rail, so its numbers match what a tap shows.
+  const countByCategory = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const it of itemsState.data) {
+      if (!it.enabled) continue;
+      map.set(it.categoryId, (map.get(it.categoryId) ?? 0) + 1);
+    }
+    return map;
+  }, [itemsState.data]);
+
+  const enabledItemCount = useMemo(
+    () => itemsState.data.reduce((n, it) => n + (it.enabled ? 1 : 0), 0),
+    [itemsState.data]
   );
 
   const lines: OrderItem[] = order?.items?.filter((l) => !l.voided) ?? [];
@@ -211,7 +258,43 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     () => lines.reduce((n, l) => n + l.qty, 0),
     [lines]
   );
+  // `subtotal` is GROSS of offers by definition; what the customer owes before
+  // tax is that minus the offer total. The cart bar shows the payable figure —
+  // quoting the gross one would over-promise at the table.
   const subtotal = order?.subtotal ?? 0;
+  const offerDiscount = order?.offerDiscount ?? 0;
+  const payable = Math.max(0, subtotal - offerDiscount);
+
+  // menuItemId -> the live offer covering it, for the grid badge. Built from
+  // the ORDER's stamps where possible so the badge and the money always agree.
+  const offerNameByItem = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const l of lines) {
+      if (l.offerName && (l.offerDiscount ?? 0) > 0) {
+        map.set(l.menuItemId, l.offerName);
+      }
+    }
+    return map;
+  }, [lines]);
+
+  // Items covered by a live offer that isn't earning anything yet — a BOGO
+  // waiting for its second coffee. Shown as a hint so the waiter can upsell it.
+  const eligibleItems = useMemo(() => {
+    const now = new Date();
+    const live = offers.filter((o) => isOfferLive(o, now));
+    if (live.length === 0) return new Set<string>();
+    const ids = new Set<string>();
+    for (const it of itemsState.data) {
+      const covered = live.some((o) => {
+        const byItem = o.itemIds ?? [];
+        const byCat = o.categoryIds ?? [];
+        if (byItem.length === 0 && byCat.length === 0) return true;
+        return byItem.includes(it.id) || byCat.includes(it.categoryId);
+      });
+      if (covered) ids.add(it.id);
+    }
+    return ids;
+  }, [offers, itemsState.data]);
 
   // ── Writes (all via orderApi) ─────────────────────────────────────────────
   // Local mirror of the order being edited. Plain writes echo into the local
@@ -228,20 +311,36 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     mirrorRef.current = order ? { orderId: order.id, items: order.items } : null;
   }, [order]);
 
+  // The offer rules AND the moment they are judged against. Pinned to the
+  // order's own createdAt so a tab keeps the deal it opened under — see
+  // PricingContext. A brand-new order's serverTimestamp is still unresolved
+  // locally, so "now" stands in until the server's value arrives; they are the
+  // same instant to within the round trip.
+  const pricing = useMemo(
+    () => ({ offers, at: order?.createdAt?.toDate() ?? new Date() }),
+    [offers, order?.createdAt]
+  );
+
   const track = (write: Promise<unknown>, what: string) => {
     inflightRef.current += 1;
     write
-      .catch((e) =>
-        Alert.alert(what, e instanceof Error ? e.message : String(e))
-      )
+      .catch((e) => {
+        // The tap already said "done" optimistically — take it back in the
+        // hand as well as on screen, or the waiter trusts a write that failed.
+        feel.error();
+        Alert.alert(what, e instanceof Error ? e.message : String(e));
+      })
       .finally(() => {
         inflightRef.current -= 1;
       });
   };
 
   const handleAdd = (item: MenuItemDoc) => {
-    if (!waiterId || busy || orderLocked) return;
-    tapFeedback();
+    // A locked order is a refusal, not a no-op: the card's tap already fired,
+    // so answer it rather than leaving the press feeling swallowed. `busy` is
+    // transient and stays silent.
+    if (orderLocked) return feel.error();
+    if (!waiterId || busy) return;
     animateNextLayout(); // a new line may enter the order sheet/cart bar
     const mirror = mirrorRef.current;
     if (mirror) {
@@ -249,7 +348,9 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         mirror.items,
         item.id,
         item.name,
-        item.price
+        item.price,
+        pricing,
+        item.categoryId
       );
       mirrorRef.current = { ...mirror, items };
       track(writeOrderItems(mirror.orderId, items), "Couldn’t add item");
@@ -262,6 +363,8 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         menuItemId: item.id,
         name: item.name,
         price: item.price,
+        categoryId: item.categoryId,
+        offers,
       });
       mirrorRef.current = { orderId: created.orderId, items: created.items };
       if (!isDineIn) setTakeawayOrderId(created.orderId);
@@ -271,10 +374,12 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
 
   const handleQty = (lineId: string, qty: number) => {
     const mirror = mirrorRef.current;
-    if (!mirror || busy || orderLocked) return;
-    tapFeedback(); // light impact on every +/- press
+    if (orderLocked) return feel.error();
+    if (!mirror || busy) return;
+    // The stepper plays its own feel on touch-down — including the softer one
+    // for the press that empties the line — so nothing is played here.
     if (qty <= 0) animateNextLayout(); // the row is about to leave the list
-    const items = setLineQtyInLines(mirror.items, lineId, qty);
+    const items = setLineQtyInLines(mirror.items, lineId, qty, pricing);
     mirrorRef.current = { ...mirror, items };
     track(writeOrderItems(mirror.orderId, items), "Couldn’t update quantity");
   };
@@ -289,18 +394,22 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
 
   const handleSendKot = async () => {
     if (!orderId || pendingCount === 0 || busy) return;
-    successFeedback(); // success notification on fire
+    // Felt in two beats: the button's own weighty press on touch-down, then
+    // the confirm below once the kitchen actually has the ticket. Playing
+    // success up front (as this used to) celebrates writes that then fail.
     setBusy(true);
     try {
       // The KOT transaction reads the order from the SERVER — make sure every
       // local (latency-compensated) edit has landed there first.
       await flushPendingWrites();
       const kotId = await sendKot(orderId, tableLabel);
+      feel.success(); // the kitchen has it — this is the beat that means it
       // Fire-and-forget: the KOT is already committed, a printer problem must
       // never block or undo the send (the on-screen KDS still has the ticket).
       if (kotId) void autoPrintKot(kotId);
     } catch (e) {
       // Lines stay pending on failure — tell the waiter so they can retry.
+      feel.error();
       Alert.alert(
         "Couldn’t send KOT",
         e instanceof Error ? e.message : String(e)
@@ -329,6 +438,9 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       await printToSavedPrinter(ticket.bytes);
       await reprintKot(kot); // bytes accepted → count the print
     } catch (e) {
+      // A warning, not an error: the ticket is committed and on the KDS. The
+      // confirm for the send has already been felt; this qualifies it.
+      feel.warn();
       Alert.alert(
         "KOT saved but couldn’t print",
         (e instanceof Error ? e.message : String(e)) +
@@ -342,13 +454,14 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   // one if it was already generated) and the settle sheet takes payment.
   const handleGenerateBill = async () => {
     if (!order || busy || pendingCount > 0) return;
-    mediumTapFeedback();
     setBusy(true);
     try {
       await flushPendingWrites();
       const id = await generateBill(order, waiterId, tableLabel, gstEnabled);
+      feel.success(); // the bill exists — the settle sheet is about to open
       setBillId(id);
     } catch (e) {
+      feel.error();
       Alert.alert(
         "Couldn’t generate bill",
         e instanceof Error ? e.message : String(e)
@@ -363,7 +476,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     categoriesState.error || itemsState.error || openOrderState.error;
 
   const renderCard = ({ item }: { item: GridEntry }) => {
-    if (item.id === SPACER) return <View style={styles.gridCell} />;
+    if (item.id.startsWith(SPACER)) return <View style={styles.gridCell} />;
     const menuItem = item as MenuItemDoc;
     const pending = pendingByItem.get(menuItem.id);
     return (
@@ -372,6 +485,8 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
           item={menuItem}
           qty={pending?.qty ?? 0}
           disabled={!waiterId}
+          offerName={offerNameByItem.get(menuItem.id)}
+          offerEligible={eligibleItems.has(menuItem.id)}
           onAdd={() => handleAdd(menuItem)}
           onDecrement={() =>
             pending && handleQty(pending.lineId, pending.qty - 1)
@@ -381,6 +496,154 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     );
   };
 
+  // ── Shared pieces ───────────────────────────────────────────────────────
+  // Built once and placed by each layout, so the phone and the tablet can
+  // never drift into showing a different search box, grid or cart.
+
+  const searchField = (
+    <View style={[styles.searchWrap, isTablet && styles.searchWrapBar]}>
+      <Feather name="search" size={17} color={colors.textMuted} />
+      <TextInput
+        style={styles.searchInput}
+        value={search}
+        onChangeText={setSearch}
+        placeholder="Search menu items, SKUs, or ingredients…"
+        placeholderTextColor={colors.textMuted}
+        autoCapitalize="none"
+      />
+    </View>
+  );
+
+  const menuGrid = (bottomPad: number) =>
+    loading ? (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    ) : errorState ? (
+      <View style={styles.center}>
+        <Text style={styles.errorText}>Couldn’t load the menu.</Text>
+        <Text style={styles.emptySub}>{errorState.message}</Text>
+      </View>
+    ) : (
+      <FlatList
+        // RN cannot change `numColumns` on a live list — remounting on the
+        // count is what lets the grid re-flow across a rotation.
+        key={`grid-${numColumns}`}
+        data={gridData}
+        keyExtractor={(it) => it.id}
+        renderItem={renderCard}
+        numColumns={numColumns}
+        columnWrapperStyle={styles.gridRow}
+        contentContainerStyle={[styles.gridContent, { paddingBottom: bottomPad }]}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={styles.center}>
+            <Text style={styles.emptyText}>No items found.</Text>
+          </View>
+        }
+      />
+    );
+
+  const cartProps = {
+    lines,
+    itemCount,
+    subtotal,
+    offerDiscount,
+    payable,
+    pendingCount,
+    busy,
+    orderLocked,
+    canBillHere,
+    onQty: handleQty,
+    onNotes: handleNotes,
+    onSendKot: handleSendKot,
+    onGenerateBill: handleGenerateBill,
+  };
+
+  // Every way out of the order sheet — the close button, the backdrop, the
+  // hardware back key — lands here, so the sheet closes with one feel however
+  // it was dismissed. Repeats inside a single gesture collapse in `feel`.
+  const closeSheet = () => {
+    feel.dismiss();
+    setSheetOpen(false);
+  };
+
+  const closeBill = () => {
+    feel.dismiss();
+    setBillId(null);
+  };
+
+  /* Counter billing: settle the takeaway bill without leaving the screen */
+  const billModal = (
+    <Modal
+      visible={billId !== null}
+      animationType="slide"
+      presentationStyle="fullScreen"
+      onRequestClose={closeBill}
+    >
+      {billId && (
+        <View style={{ flex: 1, paddingTop: insets.top }}>
+          <BillDetail billId={billId} onClose={closeBill} />
+        </View>
+      )}
+    </Modal>
+  );
+
+  // ── Tablet: categories | menu | order, all three always on screen ───────
+  // Same layout in portrait and landscape — the rails and the grid's column
+  // count absorb the difference, so a rotation never hides a pane or moves a
+  // control to somewhere new.
+  if (isTablet) {
+    return (
+      <View style={[styles.root, { paddingTop: insets.top }]}>
+        <View style={styles.tabletBar}>
+          <View style={styles.brandRow}>
+            <BrandMark size={22} />
+            <Text style={styles.brand}>Smart Serve</Text>
+          </View>
+          <Text style={styles.tabletTitle}>New Order</Text>
+          <View style={styles.tablePill}>
+            <Text style={styles.tablePillText}>{tableLabel}</Text>
+          </View>
+          {searchField}
+        </View>
+
+        <View style={styles.tabletBody}>
+          <View style={[styles.railPane, { width: panes.rail }]}>
+            <OrderCategoryRail
+              categories={enabledCategories}
+              countByCategory={countByCategory}
+              totalCount={enabledItemCount}
+              activeId={activeCategory}
+              onSelect={(id) => {
+                // Moving through choices, not pressing a button — and a
+                // re-tap of the current category says nothing, same as a chip.
+                if (id !== activeCategory) feel.select();
+                setActiveCategory(id);
+              }}
+            />
+          </View>
+
+          <View style={styles.centerPane}>{menuGrid(space.s6)}</View>
+
+          <View style={[styles.cartPane, { width: panes.cart }]}>
+            <OrderCartPanel
+              variant="pane"
+              tableLabel={tableLabel}
+              {...cartProps}
+            />
+          </View>
+        </View>
+
+        {billModal}
+
+        {/* Live kitchen status toast ("T1 — Order READY") */}
+        <KotAlertBanner alert={kotAlert} topOffset={insets.top + space.s2} />
+      </View>
+    );
+  }
+
+  // ── Phone: chips + grid, with the order in a bottom sheet ───────────────
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* App header */}
@@ -398,17 +661,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       </View>
 
       {/* Search */}
-      <View style={styles.searchWrap}>
-        <Feather name="search" size={17} color={colors.textMuted} />
-        <TextInput
-          style={styles.searchInput}
-          value={search}
-          onChangeText={setSearch}
-          placeholder="Search menu items, SKUs, or ingredients…"
-          placeholderTextColor={colors.textMuted}
-          autoCapitalize="none"
-        />
-      </View>
+      {searchField}
 
       {/* Category chips */}
       <View style={styles.chipsWrap}>
@@ -434,34 +687,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       </View>
 
       {/* Menu grid */}
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      ) : errorState ? (
-        <View style={styles.center}>
-          <Text style={styles.errorText}>Couldn’t load the menu.</Text>
-          <Text style={styles.emptySub}>{errorState.message}</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={gridData}
-          keyExtractor={(it) => it.id}
-          renderItem={renderCard}
-          numColumns={2}
-          columnWrapperStyle={styles.gridRow}
-          contentContainerStyle={[
-            styles.gridContent,
-            { paddingBottom: insets.bottom + (lines.length > 0 ? 96 : space.s6) },
-          ]}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <View style={styles.center}>
-              <Text style={styles.emptyText}>No items found.</Text>
-            </View>
-          }
-        />
-      )}
+      {menuGrid(insets.bottom + (lines.length > 0 ? 96 : space.s6))}
 
       {/* Collapsed cart bar */}
       {lines.length > 0 && !sheetOpen ? (
@@ -472,14 +698,19 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
             pressed && styles.cartBarPressed,
           ]}
           onPress={() => {
-            mediumTapFeedback(); // weighty tap when the sheet comes up
+            feel.press(); // something is opening
             setSheetOpen(true);
           }}
         >
           <Text style={styles.cartBarText}>
             🛍 View Order · {itemCount} Item{itemCount === 1 ? "" : "s"}
           </Text>
-          <Text style={styles.cartBarText}>{formatMoney(subtotal)}</Text>
+          <View style={styles.cartBarPrice}>
+            {offerDiscount > 0 ? (
+              <Text style={styles.cartBarStruck}>{formatMoney(subtotal)}</Text>
+            ) : null}
+            <Text style={styles.cartBarText}>{formatMoney(payable)}</Text>
+          </View>
         </Pressable>
       ) : null}
 
@@ -488,104 +719,29 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         visible={sheetOpen}
         animationType="slide"
         transparent
-        onRequestClose={() => setSheetOpen(false)}
+        onRequestClose={closeSheet}
       >
         <View style={styles.sheetBackdrop}>
           {/* The modal covers the screen banner, so mirror it here too. */}
           <KotAlertBanner alert={kotAlert} topOffset={insets.top + space.s2} />
           <Pressable
             style={styles.backdropFill}
-            onPress={() => setSheetOpen(false)}
+            onPress={closeSheet}
           />
           <View style={[styles.sheet, { paddingBottom: insets.bottom + space.s3 }]}>
             {/* Swipe affordance */}
             <View style={styles.dragHandle} />
 
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Current Order</Text>
-              <Pressable
-                hitSlop={8}
-                style={({ pressed }) => pressed && styles.pressed}
-                onPress={() => setSheetOpen(false)}
-              >
-                <Text style={styles.addItemsLink}>＋ Add Items</Text>
-              </Pressable>
-            </View>
-
-            <ScrollView
-              style={styles.sheetScroll}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
-            >
-              {lines.length === 0 ? (
-                <Text style={styles.emptySub}>No items yet.</Text>
-              ) : (
-                lines.map((line) => (
-                  <OrderLineRow
-                    key={line.lineId}
-                    line={line}
-                    onQty={(qty) => handleQty(line.lineId, qty)}
-                    onNotes={(notes) => handleNotes(line.lineId, notes)}
-                  />
-                ))
-              )}
-            </ScrollView>
-
-            <View style={styles.sheetFooter}>
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total</Text>
-                <Text style={styles.totalValue}>{formatMoney(subtotal)}</Text>
-              </View>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.sendBtn,
-                  (pendingCount === 0 || busy) && styles.sendBtnDisabled,
-                  pressed && styles.pressed,
-                ]}
-                onPress={handleSendKot}
-                disabled={pendingCount === 0 || busy}
-              >
-                <Text style={styles.sendBtnText}>
-                  ➤ Send KOT{pendingCount > 0 ? ` (${pendingCount})` : ""}
-                </Text>
-              </Pressable>
-              {canBillHere && lines.length > 0 && (
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.billBtn,
-                    (pendingCount > 0 || busy) && styles.sendBtnDisabled,
-                    pressed && styles.pressed,
-                  ]}
-                  onPress={handleGenerateBill}
-                  disabled={pendingCount > 0 || busy}
-                >
-                  <Text style={styles.sendBtnText}>
-                    {orderLocked
-                      ? "View Bill"
-                      : pendingCount > 0
-                        ? "Send KOT before billing"
-                        : `Generate Bill · ${formatMoney(subtotal)}`}
-                  </Text>
-                </Pressable>
-              )}
-            </View>
+            <OrderCartPanel
+              variant="sheet"
+              {...cartProps}
+              onClose={closeSheet}
+            />
           </View>
         </View>
       </Modal>
 
-      {/* Counter billing: settle the takeaway bill without leaving the screen */}
-      <Modal
-        visible={billId !== null}
-        animationType="slide"
-        presentationStyle="fullScreen"
-        onRequestClose={() => setBillId(null)}
-      >
-        {billId && (
-          <View style={{ flex: 1, paddingTop: insets.top }}>
-            <BillDetail billId={billId} onClose={() => setBillId(null)} />
-          </View>
-        )}
-      </Modal>
+      {billModal}
 
       {/* Live kitchen status toast ("T1 — Order READY") */}
       <KotAlertBanner alert={kotAlert} topOffset={insets.top + space.s2} />
@@ -609,7 +765,13 @@ function Chip({
         active && styles.chipActive,
         pressed && styles.pressed,
       ]}
-      onPress={onPress}
+      onPress={() => {
+        // A filter tick, not a button press: the same feel the tablet rail
+        // uses, so scanning categories feels identical on both layouts.
+        // Re-tapping the active chip changes nothing, so it says nothing.
+        if (!active) feel.select();
+        onPress();
+      }}
     >
       <Text style={[styles.chipText, active && styles.chipTextActive]}>
         {label}
@@ -672,12 +834,59 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     ...shadow.card,
   },
+  // On a tablet the field lives inside the top bar rather than on its own
+  // row: no outer margins, and it takes the slack left by the brand + title.
+  searchWrapBar: {
+    flex: 1,
+    maxWidth: 460,
+    marginHorizontal: 0,
+    marginBottom: 0,
+  },
   searchInput: {
     flex: 1,
     paddingVertical: space.s3,
     fontFamily: fonts.regular,
     fontSize: 15,
     color: colors.text,
+  },
+
+  // ── Tablet three-pane frame ─────────────────────────────────────────────
+  tabletBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s4,
+    paddingHorizontal: space.s4,
+    paddingVertical: space.s3,
+  },
+  tabletTitle: {
+    fontFamily: fonts.extrabold,
+    fontSize: 22,
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  tablePill: {
+    paddingHorizontal: space.s3,
+    paddingVertical: space.s1,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft,
+  },
+  tablePillText: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    color: colors.primary,
+  },
+  tabletBody: {
+    flex: 1,
+    flexDirection: "row",
+  },
+  railPane: {
+    paddingTop: space.s2,
+  },
+  centerPane: {
+    flex: 1,
+  },
+  cartPane: {
+    paddingLeft: space.s3,
   },
   chipsWrap: {
     paddingBottom: space.s2,
@@ -762,6 +971,18 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bold,
     fontSize: 15,
   },
+  cartBarPrice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s2,
+  },
+  cartBarStruck: {
+    color: colors.textInverse,
+    opacity: 0.65,
+    fontFamily: fonts.medium,
+    fontSize: 13,
+    textDecorationLine: "line-through",
+  },
   sheetBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
@@ -785,67 +1006,5 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     backgroundColor: colors.borderStrong,
     marginBottom: space.s3,
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingBottom: space.s2,
-  },
-  sheetTitle: {
-    fontFamily: fonts.extrabold,
-    fontSize: 18,
-    color: colors.text,
-  },
-  addItemsLink: {
-    fontFamily: fonts.bold,
-    fontSize: 14,
-    color: colors.primary,
-  },
-  sheetScroll: {
-    flexGrow: 0,
-  },
-  sheetFooter: {
-    paddingTop: space.s3,
-    gap: space.s3,
-  },
-  totalRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: space.s1,
-  },
-  sendBtn: {
-    backgroundColor: colors.primary,
-    paddingVertical: space.s4,
-    borderRadius: radius.pill,
-    alignItems: "center",
-    justifyContent: "center",
-    ...shadow.glow,
-  },
-  sendBtnDisabled: {
-    opacity: 0.5,
-  },
-  billBtn: {
-    backgroundColor: colors.primaryDark,
-    paddingVertical: space.s4,
-    borderRadius: radius.pill,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sendBtnText: {
-    color: colors.textInverse,
-    fontFamily: fonts.extrabold,
-    fontSize: 16,
-  },
-  totalLabel: {
-    fontFamily: fonts.medium,
-    fontSize: 13,
-    color: colors.textMuted,
-  },
-  totalValue: {
-    fontFamily: fonts.extrabold,
-    fontSize: 18,
-    color: colors.text,
   },
 });

@@ -7,6 +7,7 @@ import { memo } from "react";
 import { Pressable, StyleSheet, Switch, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { formatMoney } from "@/lib/money";
+import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import type { MenuItemDoc } from "./useMenuData";
 
@@ -81,6 +82,9 @@ function MenuItemCardImpl({
               hitSlop={8}
               style={({ pressed }) => [styles.actionBtn, pressed && styles.pressed]}
               onPress={() => onDelete(item)}
+              // Destructive, and it sits right beside Edit — the heavier feel
+              // is what keeps the two apart under a thumb.
+              onPressIn={feel.warn}
             >
               <Text style={[styles.actionText, styles.deleteText]}>Delete</Text>
             </Pressable>

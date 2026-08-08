@@ -20,7 +20,7 @@ import {
 } from "@/features/staff/staffApi";
 import { paths } from "@/lib/firestore/paths";
 import { agoLabel, elapsedMs } from "@/lib/date";
-import { animateNextLayout, successFeedback, tapFeedback } from "@/lib/feedback";
+import { animateNextLayout, feel, feelToggle } from "@/lib/feedback";
 import { Loading } from "@/components/Loading";
 import { colors, space, radius, shadow } from "@/theme/theme";
 import type { AppUser } from "@/types/models";
@@ -79,8 +79,9 @@ export default function StaffRoute() {
           style: "destructive",
           onPress: () => {
             animateNextLayout();
-            tapFeedback();
-            denyStaff(u.uid).catch(() => {});
+            denyStaff(u.uid)
+              .then(() => feel.heavy()) // a refusal, and it lands like one
+              .catch(() => feel.error());
           },
         },
       ],
@@ -98,8 +99,9 @@ export default function StaffRoute() {
           style: "destructive",
           onPress: () => {
             animateNextLayout();
-            tapFeedback();
-            removeStaff(u.uid).catch(() => {});
+            removeStaff(u.uid)
+              .then(() => feel.heavy()) // permanent, and it should feel it
+              .catch(() => feel.error());
           },
         },
       ],
@@ -108,8 +110,12 @@ export default function StaffRoute() {
 
   function approve(u: AppUser) {
     animateNextLayout();
-    successFeedback();
-    approveStaff(u.uid).catch(() => {});
+    // The confirm waits for the write. These failures are otherwise silent
+    // (the catch swallows them), which made the old up-front success the only
+    // thing the owner felt whether or not the person was actually let in.
+    approveStaff(u.uid)
+      .then(() => feel.success())
+      .catch(() => feel.error());
   }
 
   return (
@@ -122,6 +128,7 @@ export default function StaffRoute() {
           <Pressable
             style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
             onPress={() => router.back()}
+            onPressIn={feel.dismiss}
           >
             <Text style={styles.backBtnText}>‹ Back</Text>
           </Pressable>
@@ -156,12 +163,14 @@ export default function StaffRoute() {
                 <Pressable
                   style={({ pressed }) => [styles.approveBtn, pressed && styles.pressed]}
                   onPress={() => approve(u)}
+                  onPressIn={feel.tap}
                 >
                   <Text style={styles.approveText}>Approve</Text>
                 </Pressable>
                 <Pressable
                   style={({ pressed }) => [styles.denyBtn, pressed && styles.pressed]}
                   onPress={() => confirmDeny(u)}
+                  onPressIn={feel.warn}
                 >
                   <Text style={styles.denyText}>Deny</Text>
                 </Pressable>
@@ -189,8 +198,8 @@ export default function StaffRoute() {
                   <Switch
                     value={u.active}
                     onValueChange={(v) => {
-                      tapFeedback();
-                      setStaffActive(u.uid, v).catch(() => {});
+                      feelToggle(v); // restricting and restoring feel opposite
+                      setStaffActive(u.uid, v).catch(() => feel.error());
                     }}
                     trackColor={{ false: colors.borderStrong, true: colors.primary }}
                     thumbColor={colors.surface}
@@ -203,6 +212,7 @@ export default function StaffRoute() {
               <Pressable
                 style={({ pressed }) => [styles.removeLink, pressed && styles.pressed]}
                 onPress={() => confirmRemove(u)}
+                onPressIn={feel.warn}
               >
                 <Text style={styles.removeText}>Remove from staff</Text>
               </Pressable>
@@ -227,12 +237,14 @@ export default function StaffRoute() {
                   <Pressable
                     style={({ pressed }) => [styles.approveBtn, pressed && styles.pressed]}
                     onPress={() => approve(u)}
+                    onPressIn={feel.tap}
                   >
                     <Text style={styles.approveText}>Approve anyway</Text>
                   </Pressable>
                   <Pressable
                     style={({ pressed }) => [styles.denyBtn, pressed && styles.pressed]}
                     onPress={() => confirmRemove(u)}
+                    onPressIn={feel.warn}
                   >
                     <Text style={styles.denyText}>Remove</Text>
                   </Pressable>

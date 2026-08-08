@@ -28,11 +28,41 @@ import type {
   VoidReason,
 } from "@/types/models";
 
-/** Non-voided order lines as bill inputs. */
+/**
+ * Non-voided order lines as bill inputs.
+ *
+ * The offer discount is carried through from the line, not recomputed here.
+ * It was stamped when the waiter added the item and is a SNAPSHOT in exactly
+ * the way `price` is: what matters is the deal the guest was quoted at the
+ * table, not whether the promo is still running by the time they ask for the
+ * bill. A party that ordered inside happy hour keeps happy-hour pricing.
+ */
 function linesOf(order: Order): BillLine[] {
   return order.items
     .filter((i) => !i.voided)
-    .map((i) => ({ price: i.price, qty: i.qty, voided: false }));
+    .map((i) => ({
+      price: i.price,
+      qty: i.qty,
+      voided: false,
+      offerDiscount: i.offerDiscount ?? 0,
+    }));
+}
+
+/** What each offer contributed to an order, for the day's `byOffer` report. */
+function offerTallyOf(order: Order): Map<string, { name: string; amount: number }> {
+  const tally = new Map<string, { name: string; amount: number }>();
+  for (const line of order.items) {
+    if (line.voided) continue;
+    const amount = line.offerDiscount ?? 0;
+    if (!line.offerId || amount <= 0) continue;
+    const entry = tally.get(line.offerId) ?? {
+      name: line.offerName ?? "Offer",
+      amount: 0,
+    };
+    entry.amount += amount;
+    tally.set(line.offerId, entry);
+  }
+  return tally;
 }
 
 /**
@@ -197,12 +227,29 @@ export async function settleBill(
     const bySource = { ...EMPTY_SOURCES, ...(prev?.bySource ?? {}) };
     const byNcReason = { ...EMPTY_NC_REASONS, ...(prev?.byNcReason ?? {}) };
     const itemSales: DailySummary["itemSales"] = { ...(prev?.itemSales ?? {}) };
+    const byOffer: DailySummary["byOffer"] = { ...(prev?.byOffer ?? {}) };
 
     if (settlement.kind === "nc") {
       byNcReason[settlement.reason] += bill.grandTotal;
     } else {
       byPaymentMode[settlement.mode] += bill.grandTotal;
       bySource[order.orderType] += bill.grandTotal;
+    }
+
+    // A comped bill collected nothing, so its offers cost the restaurant
+    // nothing on top of the comp — the whole meal is already tallied under
+    // ncAmount. Counting the discount again would double-charge the giveaway.
+    const billOfferDiscount = isNc ? 0 : (bill.offerDiscount ?? 0);
+    if (!isNc) {
+      for (const [offerId, { name, amount }] of offerTallyOf(order)) {
+        const entry = byOffer[offerId] ?? { name, count: 0, amount: 0 };
+        entry.count += 1;
+        entry.amount += amount;
+        // Refresh the label: a renamed offer should read under its current
+        // name, and the snapshot on the line is the most recent one seen.
+        entry.name = name;
+        byOffer[offerId] = entry;
+      }
     }
 
     let voidedItemCount = prev?.voidedItemCount ?? 0;
@@ -239,6 +286,10 @@ export async function settleBill(
       // Carried forward untouched — settling never cancels anything.
       voidedBillCount: prev?.voidedBillCount ?? 0,
       voidedRevenue: prev?.voidedRevenue ?? 0,
+      // `totalRevenue` is already net of offers, so this is the cost of having
+      // earned it — the figure that answers "is the promo worth running?".
+      offerDiscount: (prev?.offerDiscount ?? 0) + billOfferDiscount,
+      byOffer,
       updatedAt: serverTimestamp() as unknown as DailySummary["updatedAt"],
     };
 
@@ -354,6 +405,7 @@ export async function voidBill(
     const bySource = { ...EMPTY_SOURCES, ...(prev?.bySource ?? {}) };
     const byNcReason = { ...EMPTY_NC_REASONS, ...(prev?.byNcReason ?? {}) };
     const itemSales: DailySummary["itemSales"] = { ...(prev?.itemSales ?? {}) };
+    const byOffer: DailySummary["byOffer"] = { ...(prev?.byOffer ?? {}) };
 
     // Every subtraction is clamped at zero. A bill settled before its summary
     // bucket existed contributed nothing to reverse, and a negative total on
@@ -389,6 +441,19 @@ export async function voidBill(
         if (qty <= 0) delete itemSales[line.menuItemId];
         else itemSales[line.menuItemId] = { ...entry, qty, revenue };
       }
+      // Offers unwind with the sale that carried them. Leaving them behind
+      // would show a promo that cost money on a day where the matching revenue
+      // no longer exists — the exact asymmetry this function exists to avoid.
+      // Comped bills never entered byOffer (settleBill skips them), so there
+      // is nothing to reverse on that branch.
+      for (const [offerId, { amount }] of offerTallyOf(order)) {
+        const entry = byOffer[offerId];
+        if (!entry) continue;
+        const count = entry.count - 1;
+        const nextAmount = sub(entry.amount, amount);
+        if (count <= 0) delete byOffer[offerId];
+        else byOffer[offerId] = { ...entry, count, amount: nextAmount };
+      }
     }
 
     const nextSummary: DailySummary = {
@@ -411,6 +476,10 @@ export async function voidBill(
       byNcReason,
       voidedBillCount: (prev?.voidedBillCount ?? 0) + 1,
       voidedRevenue: (prev?.voidedRevenue ?? 0) + fresh.grandTotal,
+      offerDiscount: wasNc
+        ? (prev?.offerDiscount ?? 0)
+        : sub(prev?.offerDiscount ?? 0, fresh.offerDiscount ?? 0),
+      byOffer,
       updatedAt: serverTimestamp() as unknown as DailySummary["updatedAt"],
     };
 

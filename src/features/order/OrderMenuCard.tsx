@@ -21,6 +21,13 @@ interface OrderMenuCardProps {
   item: MenuItem & { id: string };
   /** Qty of this item on the current (editable/pending) order line; 0 = none. */
   qty: number;
+  /** The offer currently EARNING on this item in the order — the discount is
+   *  already in the total. Shown as a solid violet ribbon. */
+  offerName?: string;
+  /** A live offer covers this item but hasn't triggered yet (a BOGO waiting
+   *  for its second unit). A quieter outline tag, so the waiter can upsell it
+   *  without mistaking it for a saving the guest already has. */
+  offerEligible?: boolean;
   onAdd: () => void;
   onDecrement: () => void;
   disabled?: boolean;
@@ -29,6 +36,8 @@ interface OrderMenuCardProps {
 function OrderMenuCardImpl({
   item,
   qty,
+  offerName,
+  offerEligible,
   onAdd,
   onDecrement,
   disabled,
@@ -52,6 +61,20 @@ function OrderMenuCardImpl({
         </View>
       )}
 
+      {offerName ? (
+        <View style={styles.offerRibbon}>
+          <Feather name="tag" size={10} color={colors.textInverse} />
+          <Text style={styles.offerRibbonText} numberOfLines={1}>
+            {offerName}
+          </Text>
+        </View>
+      ) : offerEligible ? (
+        <View style={styles.offerTag}>
+          <Feather name="tag" size={10} color={colors.primary} />
+          <Text style={styles.offerTagText}>OFFER</Text>
+        </View>
+      ) : null}
+
       <View style={styles.body}>
         <Text style={styles.name} numberOfLines={1}>
           {item.name}
@@ -61,9 +84,13 @@ function OrderMenuCardImpl({
 
           {inOrder ? (
             <View style={styles.stepper}>
+              {/* The press that takes the last unit off is the one that
+                  deletes the line — it gets the softer "gone" feel so a run
+                  of decrements doesn't end on the same tap it started with. */}
               <PressableScale
                 hitSlop={8}
                 style={styles.stepBtn}
+                haptic={qty === 1 ? "dismiss" : "tap"}
                 onPress={onDecrement}
                 disabled={disabled}
               >
@@ -114,6 +141,48 @@ const styles = StyleSheet.create({
   placeholder: {
     alignItems: "center",
     justifyContent: "center",
+  },
+  // Both badges float over the photo's bottom-left, clear of the `+` button
+  // at bottom-right and of the name below.
+  offerRibbon: {
+    position: "absolute",
+    top: space.s2,
+    left: space.s2,
+    right: space.s5,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s1,
+    alignSelf: "flex-start",
+    backgroundColor: colors.primary,
+    paddingHorizontal: space.s2,
+    paddingVertical: 3,
+    borderRadius: radius.pill,
+  },
+  offerRibbonText: {
+    flexShrink: 1,
+    fontFamily: fonts.extrabold,
+    fontSize: 10,
+    color: colors.textInverse,
+  },
+  offerTag: {
+    position: "absolute",
+    top: space.s2,
+    left: space.s2,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: colors.offerSoft,
+    borderWidth: 1,
+    borderColor: colors.offerBorder,
+    paddingHorizontal: space.s2,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  offerTagText: {
+    fontFamily: fonts.extrabold,
+    fontSize: 9,
+    letterSpacing: 0.5,
+    color: colors.primary,
   },
   body: {
     padding: space.s3,

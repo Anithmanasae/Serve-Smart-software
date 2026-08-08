@@ -14,6 +14,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import {
   saveRestaurantProfile,
@@ -43,8 +44,12 @@ export function ReceiptDetailsCard() {
     setSaving(true);
     try {
       await saveRestaurantProfile(name, addressLine);
+      // Nothing on screen moves much when this lands, so the confirm is what
+      // tells the owner the header on every future receipt just changed.
+      feel.success();
       setDirty(false);
     } catch (e) {
+      feel.error();
       Alert.alert("Couldn't save", e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
@@ -93,6 +98,7 @@ export function ReceiptDetailsCard() {
           pressed && styles.pressed,
         ]}
         onPress={onSave}
+        onPressIn={feel.press}
         disabled={!canSave}
       >
         {saving ? (

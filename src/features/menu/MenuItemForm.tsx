@@ -23,6 +23,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { rupeesToPaise } from "@/lib/money";
+import { feel, feelToggle } from "@/lib/feedback";
 import { colors, radius, space } from "@/theme/theme";
 import type { MenuCategory, MenuItem } from "@/types/models";
 import {
@@ -178,6 +179,7 @@ export function MenuItemForm({
   const pickImage = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
+      feel.error();
       setError("Photo library permission is required to add an image.");
       return;
     }
@@ -200,6 +202,7 @@ export function MenuItemForm({
       // `file://` path written to Firestore would render on this device and
       // be a broken image on every other one. Drop the photo instead.
       setPendingImage(null);
+      feel.error();
       setError(e instanceof Error ? e.message : "Could not process that image.");
     } finally {
       setEncoding(false);
@@ -239,6 +242,8 @@ export function MenuItemForm({
           await setMenuItemImage(itemId, pendingImage.dataUri);
         } catch (e) {
           const detail = e instanceof Error ? e.message : String(e);
+          // Saved, but not entirely — a warning rather than a confirm.
+          feel.warn();
           Alert.alert(
             "Item saved without photo",
             `The item was saved, but the photo could not be stored: ${detail}`
@@ -246,8 +251,10 @@ export function MenuItemForm({
         }
       }
 
+      feel.success();
       onClose();
     } catch (e) {
+      feel.error();
       setError(e instanceof Error ? e.message : "Failed to save item.");
       setSaving(false);
     }
@@ -341,7 +348,10 @@ export function MenuItemForm({
                       active && styles.chipActive,
                       pressed && styles.pressed,
                     ]}
-                    onPress={() => setCategoryId(c.id)}
+                    onPress={() => {
+                      if (categoryId !== c.id) feel.select();
+                      setCategoryId(c.id);
+                    }}
                   >
                     <Text
                       style={[styles.chipText, active && styles.chipTextActive]}
@@ -392,7 +402,10 @@ export function MenuItemForm({
               <Text style={styles.label}>Available</Text>
               <Switch
                 value={enabled}
-                onValueChange={setEnabled}
+                onValueChange={(v) => {
+                  feelToggle(v);
+                  setEnabled(v);
+                }}
                 trackColor={{ true: colors.primary, false: colors.borderStrong }}
                 thumbColor={colors.surface}
               />

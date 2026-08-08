@@ -25,6 +25,7 @@ import type {
   Kot,
   MenuCategory,
   MenuItem,
+  Offer,
   Order,
   RestaurantCodeEntry,
   RestaurantProfile,
@@ -97,6 +98,11 @@ export const paths = {
 
   menuItems: () => col<MenuItem>("menuItems"),
   menuItem: (id: string) => ref<MenuItem>("menuItems", id),
+
+  /** Discount rules (BOGO, combo prices, Monday Madness…). Read by every
+   *  active staff member — the waiter's order screen prices against them. */
+  offers: () => col<Offer>("offers"),
+  offer: (id: string) => ref<Offer>("offers", id),
 
   orders: () => col<Order>("orders"),
   order: (id: string) => ref<Order>("orders", id),

@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { randomUUID } from "expo-crypto";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { feel, feelToggle } from "@/lib/feedback";
 import { colors, radius, space } from "@/theme/theme";
 import {
   createMenuCategory,
@@ -49,6 +50,9 @@ export function CategoryManager({
     try {
       await fn();
     } catch (e) {
+      // This screen reports failures as a line of inline text, which is the
+      // easiest kind of error to miss — so it gets said in the hand too.
+      feel.error();
       setError(e instanceof Error ? e.message : "Action failed.");
     }
   };
@@ -104,6 +108,7 @@ export function CategoryManager({
               hitSlop={8}
               style={({ pressed }) => pressed && styles.pressed}
               onPress={onClose}
+              onPressIn={feel.dismiss}
             >
               <Text style={styles.close}>✕</Text>
             </Pressable>
@@ -122,6 +127,7 @@ export function CategoryManager({
             <Pressable
               style={({ pressed }) => [styles.addBtn, pressed && styles.pressed]}
               onPress={handleAdd}
+              onPressIn={feel.tap}
             >
               <Text style={styles.addBtnText}>Add</Text>
             </Pressable>
@@ -144,6 +150,7 @@ export function CategoryManager({
                       style={({ pressed }) => pressed && styles.pressed}
                       disabled={index === 0}
                       onPress={() => move(index, -1)}
+                      onPressIn={feel.tick}
                     >
                       <Text
                         style={[
@@ -159,6 +166,7 @@ export function CategoryManager({
                       style={({ pressed }) => pressed && styles.pressed}
                       disabled={index === categories.length - 1}
                       onPress={() => move(index, 1)}
+                      onPressIn={feel.tick}
                     >
                       <Text
                         style={[
@@ -189,6 +197,7 @@ export function CategoryManager({
                         pressed && styles.pressed,
                       ]}
                       onPress={() => {
+                        feel.tap();
                         setEditingId(c.id);
                         setEditingName(c.name);
                       }}
@@ -202,9 +211,10 @@ export function CategoryManager({
 
                   <Switch
                     value={c.enabled}
-                    onValueChange={(v) =>
-                      run(() => setMenuCategoryEnabled(c.id, v))
-                    }
+                    onValueChange={(v) => {
+                      feelToggle(v);
+                      void run(() => setMenuCategoryEnabled(c.id, v));
+                    }}
                     trackColor={{
                       true: colors.primary,
                       false: colors.borderStrong,
@@ -216,6 +226,7 @@ export function CategoryManager({
                     hitSlop={8}
                     style={({ pressed }) => pressed && styles.pressed}
                     onPress={() => run(() => deleteMenuCategory(c.id))}
+                    onPressIn={feel.warn}
                   >
                     <Text style={styles.delete}>Delete</Text>
                   </Pressable>

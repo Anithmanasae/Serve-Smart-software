@@ -21,6 +21,7 @@ import {
   hasContact,
   openContactChat,
 } from "@/config/contact";
+import { feel } from "@/lib/feedback";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
 /** Re-render once a minute so the countdown doesn't go stale on a screen the
@@ -97,6 +98,7 @@ export function TrialStatusCard() {
         <Pressable
           style={({ pressed }) => [styles.button, pressed && styles.pressed]}
           onPress={onContact}
+          onPressIn={feel.press}
         >
           <Text style={styles.buttonText}>Contact {CONTACT_NAME} to activate</Text>
         </Pressable>

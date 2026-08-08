@@ -24,7 +24,10 @@ import {
 // Range model
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type RangeKind = "today" | "week" | "month";
+/** The fixed, relative-to-today ranges offered as one-tap chips. */
+export type PresetKind = "today" | "week" | "month";
+/** Everything the range selector can be set to. */
+export type RangeKind = PresetKind | "custom";
 
 export interface DateRange {
   /** Inclusive first day key (yyyy-mm-dd). */
@@ -37,17 +40,53 @@ export interface DateRange {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Build a range of day keys ending at `end` and spanning `days` days. */
-function rangeEndingAt(end: Date, days: number): DateRange {
-  const keys: string[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    keys.push(dayKey(new Date(end.getTime() - i * DAY_MS)));
-  }
-  return { start: keys[0], end: keys[keys.length - 1], keys };
+/**
+ * Longest custom range we will subscribe to. The subscription also streams the
+ * preceding period (for deltas), so the real ceiling is 2× this many summary
+ * documents — and each one carries a full `itemSales` map.
+ */
+export const MAX_RANGE_DAYS = 366;
+
+/**
+ * Day-key arithmetic is done in UTC on purpose. A key is a *label* for a
+ * business day, not an instant: once `dayKey` has picked today's label (in
+ * IST), stepping backwards through the calendar is pure integer maths and must
+ * not be re-interpreted against any timezone or DST rule.
+ */
+function keyToUTC(key: string): number {
+  const [y, m, d] = key.split("-").map(Number);
+  return Date.UTC(y, m - 1, d);
 }
 
-/** Number of days each range kind spans. */
-export function rangeLength(kind: RangeKind): number {
+function utcToKey(ms: number): string {
+  const dt = new Date(ms);
+  const m = String(dt.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(dt.getUTCDate()).padStart(2, "0");
+  return `${dt.getUTCFullYear()}-${m}-${d}`;
+}
+
+/** The day key `days` after `key` (negative for earlier). */
+export function shiftDayKey(key: string, days: number): string {
+  return utcToKey(keyToUTC(key) + days * DAY_MS);
+}
+
+/** Inclusive number of days spanned by two keys, in either order. */
+export function dayCount(a: string, b: string): number {
+  return Math.abs(Math.round((keyToUTC(b) - keyToUTC(a)) / DAY_MS)) + 1;
+}
+
+/** Inclusive range between two day keys. Accepts them in either order. */
+export function rangeBetween(a: string, b: string): DateRange {
+  // yyyy-mm-dd sorts correctly as a string, so no parsing needed to order them.
+  const [start, end] = a <= b ? [a, b] : [b, a];
+  const last = keyToUTC(end);
+  const keys: string[] = [];
+  for (let t = keyToUTC(start); t <= last; t += DAY_MS) keys.push(utcToKey(t));
+  return { start, end, keys };
+}
+
+/** Number of days each preset spans. */
+export function rangeLength(kind: PresetKind): number {
   switch (kind) {
     case "today":
       return 1;
@@ -58,20 +97,23 @@ export function rangeLength(kind: RangeKind): number {
   }
 }
 
-/** The current range for the selected kind, ending today. */
-export function currentRange(kind: RangeKind, now: Date = new Date()): DateRange {
-  return rangeEndingAt(now, rangeLength(kind));
+/** The current range for the selected preset, ending today. */
+export function currentRange(
+  kind: PresetKind,
+  now: Date = new Date()
+): DateRange {
+  const end = dayKey(now);
+  return rangeBetween(shiftDayKey(end, -(rangeLength(kind) - 1)), end);
 }
 
 /**
- * The previous equivalent period (immediately before the current range),
- * used for delta comparisons. For a 7-day week ending today, this is the
- * 7 days before the current range's start.
+ * The equally-long period immediately before `range`, used for delta
+ * comparisons. Derived from the range itself rather than from a preset, so a
+ * 12-day custom range is compared against the 12 days preceding it.
  */
-export function previousRange(kind: RangeKind, now: Date = new Date()): DateRange {
-  const len = rangeLength(kind);
-  const prevEnd = new Date(now.getTime() - len * DAY_MS);
-  return rangeEndingAt(prevEnd, len);
+export function previousOf(range: DateRange): DateRange {
+  const end = shiftDayKey(range.start, -1);
+  return rangeBetween(shiftDayKey(end, -(range.keys.length - 1)), end);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,14 +123,25 @@ export function previousRange(kind: RangeKind, now: Date = new Date()): DateRang
 export type DailySummaryDoc = DailySummary & { id: string };
 
 /**
- * Subscribe to all daily summaries at/after `sinceKey`. Uses a single-field
- * `date >=` filter (no composite index required). Callers slice out the exact
- * days they need with {@link summariesForKeys}.
+ * Subscribe to the daily summaries between two day keys, inclusive. Both
+ * filters are on the same `date` field, so this stays a single-field range
+ * query — no composite index, however many days it spans.
+ *
+ * Pass the span that covers the current range AND the preceding comparison
+ * period (they are contiguous); callers slice out the exact days they need
+ * with {@link summariesForKeys}. The upper bound matters: without it, a custom
+ * range that ends in the past would stream every summary from its start to
+ * today.
  */
-export function useDailySummaries(sinceKey: string) {
+export function useDailySummaries(fromKey: string, toKey: string) {
   const q = useMemo(
-    () => query(paths.dailySummaries(), where("date", ">=", sinceKey)),
-    [sinceKey]
+    () =>
+      query(
+        paths.dailySummaries(),
+        where("date", ">=", fromKey),
+        where("date", "<=", toKey)
+      ),
+    [fromKey, toKey]
   );
   return useCollectionData<DailySummary>(q);
 }

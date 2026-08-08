@@ -11,6 +11,7 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import type { Kot, KotStatus } from "@/types/models";
 
@@ -50,6 +51,12 @@ export function useKotStatusAlerts(
           (k.status === "preparing" || k.status === "ready") &&
           (isMineRef.current ? isMineRef.current(k) : true)
         ) {
+          // The one haptic in the app the user did not ask for, so it is
+          // rationed: READY is the waiter's cue to walk to the pass and earns
+          // the confirm, while PREPARING is a progress note and only ticks.
+          // A banner alone is useless to someone carrying three plates.
+          if (k.status === "ready") feel.success();
+          else feel.select();
           setAlert({
             key: Date.now(),
             tableLabel: k.tableLabel,

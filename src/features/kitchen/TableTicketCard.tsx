@@ -20,7 +20,7 @@ import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import { formatTimeIST } from "@/lib/date";
-import { animateNextLayout, tapFeedback } from "@/lib/feedback";
+import { animateNextLayout, feel } from "@/lib/feedback";
 import { ElapsedTime } from "@/components/ElapsedTime";
 import { completeGroup } from "./groupActions";
 import { hasAdditionalRound, type TableGroup } from "./groupKots";
@@ -77,19 +77,25 @@ export const TableTicketCard = memo(function TableTicketCard({
   const hidden = lines.length - shown.length;
 
   const onComplete = useCallback(() => {
-    tapFeedback();
     animateNextLayout(); // the card leaves this tab on status change
-    completeGroup(group).catch((e) =>
-      Alert.alert(
-        "Couldn’t update ticket",
-        e instanceof Error ? e.message : String(e)
-      )
-    );
+    completeGroup(group)
+      // Marking a table's food done is the kitchen's whole job — it earns a
+      // confirm, and the chef's hands are usually busy enough that the pulse
+      // is the only acknowledgement they'll actually notice.
+      .then(() => feel.success())
+      .catch((e) => {
+        feel.error();
+        Alert.alert(
+          "Couldn’t update ticket",
+          e instanceof Error ? e.message : String(e)
+        );
+      });
   }, [group]);
 
   return (
     <Pressable
       onPress={onPress}
+      onPressIn={feel.press} // the detail sheet is about to come up
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
     >
       {/* Queue block — thick status-colored left edge */}
@@ -142,6 +148,7 @@ export const TableTicketCard = memo(function TableTicketCard({
         ) : (
           <Pressable
             onPress={onComplete}
+            onPressIn={feel.press}
             style={({ pressed }) => [
               styles.completeBtn,
               { backgroundColor: accent },

@@ -48,6 +48,10 @@ export interface BillLine {
   price: number; // paise, per unit
   qty: number;
   voided?: boolean;
+  /** Paise knocked off this WHOLE line by an offer (see src/lib/offers.ts).
+   *  `price` stays the full menu price — the discount is a separate number,
+   *  never a marked-down price. */
+  offerDiscount?: number;
 }
 
 export type BillTotals = Pick<
@@ -59,18 +63,33 @@ export type BillTotals = Pick<
   | "sgst"
   | "gstTotal"
   | "grandTotal"
->;
+> & {
+  /** Σ of the lines' offer discounts (paise), clamped to the subtotal. */
+  offerDiscount: number;
+};
 
 /**
- * Compute a bill from order lines + an optional discount percent.
+ * Compute a bill from order lines, the offers already stamped on them, and an
+ * optional manual discount percent.
  *
- * Order of operations (matches the Bills mockup):
- *   subtotal        = Σ price*qty for non-voided lines
- *   discountAmount  = subtotal * discount%
- *   taxable         = subtotal - discountAmount
+ * Order of operations:
+ *   subtotal        = Σ price*qty for non-voided lines          (GROSS)
+ *   offerDiscount   = Σ line offerDiscount, capped at subtotal
+ *   afterOffers     = subtotal - offerDiscount
+ *   discountAmount  = afterOffers * discount%
+ *   taxable         = afterOffers - discountAmount
  *   cgst            = taxable * 2.5%   (0 when GST is switched off)
  *   sgst            = taxable * 2.5%   (0 when GST is switched off)
  *   grandTotal      = taxable + cgst + sgst
+ *
+ * `subtotal` stays GROSS on purpose. It is what the kitchen sent out, it is
+ * what `itemSales` sums to, and it is the figure the offer saving is quoted
+ * against on the receipt — netting the offers into it would leave nothing to
+ * show the customer and nothing for the owner to measure the promo by.
+ *
+ * Offers come off BEFORE the manual percent, so a manual discount (which the
+ * rules pin to zero anyway) can never be stacked on top of the full price to
+ * multiply a giveaway.
  *
  * `gstEnabled: false` (the cashier's Account-screen switch) zeroes both GST
  * components; the rules' gstTotal == cgst + sgst check still holds at 0.
@@ -84,13 +103,23 @@ export function computeBill(
   gstEnabled = true
 ): BillTotals {
   const pct = Math.min(Math.max(discountPercent, 0), 100);
+  const live = lines.filter((l) => !l.voided);
 
-  const subtotal = lines
-    .filter((l) => !l.voided)
-    .reduce((sum, l) => sum + l.price * l.qty, 0);
+  const subtotal = live.reduce((sum, l) => sum + l.price * l.qty, 0);
 
-  const discountAmount = roundPaise((subtotal * pct) / 100);
-  const taxable = subtotal - discountAmount;
+  // Clamped both ends: a malformed line must never produce a negative bill,
+  // and offers can at most make the food free — never owe the customer money.
+  const offerDiscount = Math.min(
+    Math.max(
+      live.reduce((sum, l) => sum + Math.max(0, l.offerDiscount ?? 0), 0),
+      0
+    ),
+    subtotal
+  );
+
+  const afterOffers = subtotal - offerDiscount;
+  const discountAmount = roundPaise((afterOffers * pct) / 100);
+  const taxable = afterOffers - discountAmount;
 
   const cgst = gstEnabled ? roundPaise(taxable * TAX_CONFIG.cgstRate) : 0;
   const sgst = gstEnabled ? roundPaise(taxable * TAX_CONFIG.sgstRate) : 0;
@@ -99,6 +128,7 @@ export function computeBill(
 
   return {
     subtotal,
+    offerDiscount,
     discountPercent: pct,
     discountAmount,
     cgst,

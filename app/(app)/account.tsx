@@ -7,6 +7,7 @@ import { ReceiptDetailsCard } from "@/features/settings/ReceiptDetailsCard";
 import { PrinterSettingsCard } from "@/features/settings/PrinterSettingsCard";
 import { TrialStatusCard } from "@/features/settings/TrialStatusCard";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
+import { feel, feelToggle } from "@/lib/feedback";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
 /** Signed-in user's profile, billing settings + sign out. */
@@ -22,6 +23,9 @@ export default function AccountRoute() {
   const canToggleGst = role === "cashier" || role === "admin";
   // Admins reach Menu Management from its own tab; cashiers get an entry here.
   const showMenuManagement = role === "cashier";
+  // Offers price every order, so they sit with the menu they discount. Admin
+  // gets the entry here too — unlike the menu, offers have no tab of their own.
+  const showOffers = role === "cashier" || role === "admin";
   // The cashier is the "2nd owner": approves signups, restricts/removes staff.
   const showStaff = role === "cashier" || role === "admin";
   // Owner (cashier) + admin size the floor — how many tables the restaurant has.
@@ -62,7 +66,10 @@ export default function AccountRoute() {
             </View>
             <Switch
               value={gstEnabled}
-              onValueChange={setGstEnabled}
+              onValueChange={(v) => {
+                feelToggle(v);
+                setGstEnabled(v);
+              }}
               trackColor={{ false: colors.borderStrong, true: colors.primary }}
               thumbColor={colors.surface}
             />
@@ -73,6 +80,7 @@ export default function AccountRoute() {
           <Pressable
             style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
             onPress={() => router.push("/bill-history")}
+            onPressIn={feel.press}
           >
             <View style={styles.settingText}>
               <Text style={styles.settingLabel}>Bill History</Text>
@@ -92,22 +100,46 @@ export default function AccountRoute() {
         </>
       )}
 
-      {showMenuManagement && (
+      {(showMenuManagement || showOffers) && (
         <View style={styles.settingsCard}>
           <Text style={styles.settingsTitle}>Menu</Text>
-          <Pressable
-            style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
-            onPress={() => router.push("/menu")}
-          >
-            <View style={styles.settingText}>
-              <Text style={styles.settingLabel}>Menu Management</Text>
-              <Text style={styles.settingHint}>
-                Add, edit or remove items (up to 1,000) and mark dishes
-                unavailable for the day
-              </Text>
-            </View>
-            <Text style={styles.settingChevron}>›</Text>
-          </Pressable>
+          {showMenuManagement && (
+            <Pressable
+              style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
+              onPress={() => router.push("/menu")}
+              onPressIn={feel.press}
+            >
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Menu Management</Text>
+                <Text style={styles.settingHint}>
+                  Add, edit or remove items (up to 1,000) and mark dishes
+                  unavailable for the day
+                </Text>
+              </View>
+              <Text style={styles.settingChevron}>›</Text>
+            </Pressable>
+          )}
+
+          {showMenuManagement && showOffers && (
+            <View style={styles.settingsDivider} />
+          )}
+
+          {showOffers && (
+            <Pressable
+              style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
+              onPress={() => router.push("/offers")}
+              onPressIn={feel.press}
+            >
+              <View style={styles.settingText}>
+                <Text style={styles.settingLabel}>Offers & Discounts</Text>
+                <Text style={styles.settingHint}>
+                  Buy One Get One, combo prices, Monday-only deals — applied to
+                  orders automatically
+                </Text>
+              </View>
+              <Text style={styles.settingChevron}>›</Text>
+            </Pressable>
+          )}
         </View>
       )}
 
@@ -129,6 +161,7 @@ export default function AccountRoute() {
           <Pressable
             style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
             onPress={() => router.push("/tables-setup")}
+            onPressIn={feel.press}
           >
             <View style={styles.settingText}>
               <Text style={styles.settingLabel}>Table Setup</Text>
@@ -147,6 +180,7 @@ export default function AccountRoute() {
           <Pressable
             style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
             onPress={() => router.push("/staff")}
+            onPressIn={feel.press}
           >
             <View style={styles.settingText}>
               <Text style={styles.settingLabel}>Staff Management</Text>
@@ -163,6 +197,7 @@ export default function AccountRoute() {
       <Pressable
         style={({ pressed }) => [styles.signOutBtn, pressed && styles.pressed]}
         onPress={() => signOut()}
+        onPressIn={feel.warn} // you are about to be thrown out of the app
       >
         <Text style={styles.signOutText}>Sign Out</Text>
       </Pressable>
