@@ -18,7 +18,6 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   FlatList,
   Modal,
@@ -31,6 +30,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Feather } from "@expo/vector-icons";
+import { router } from "expo-router";
 import { formatMoney } from "@/lib/money";
 import { isOfferLive } from "@/lib/offers";
 import { gridColumns, useResponsive } from "@/lib/responsive";
@@ -38,6 +38,7 @@ import { useOffers } from "@/features/offers/useOffersData";
 import { animateNextLayout, feel } from "@/lib/feedback";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
+import { Bone, Skeleton } from "@/components/Skeleton";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
@@ -500,6 +501,22 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   // Built once and placed by each layout, so the phone and the tablet can
   // never drift into showing a different search box, grid or cart.
 
+  // A table's order is PUSHED onto the (app) stack; the takeaway order is a
+  // tab. So this is the one layout of this screen with no tab bar underneath
+  // it, and the only one that has to carry its own way out.
+  const backButton = tableId ? (
+    <Pressable
+      style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
+      onPress={() => router.back()}
+      onPressIn={feel.dismiss}
+      hitSlop={space.s3}
+      accessibilityRole="button"
+      accessibilityLabel="Back to tables"
+    >
+      <Feather name="chevron-left" size={24} color={colors.primary} />
+    </Pressable>
+  ) : null;
+
   const searchField = (
     <View style={[styles.searchWrap, isTablet && styles.searchWrapBar]}>
       <Feather name="search" size={17} color={colors.textMuted} />
@@ -516,9 +533,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
 
   const menuGrid = (bottomPad: number) =>
     loading ? (
-      <View style={styles.center}>
-        <ActivityIndicator color={colors.primary} />
-      </View>
+      <MenuGridSkeleton columns={numColumns} />
     ) : errorState ? (
       <View style={styles.center}>
         <Text style={styles.errorText}>Couldn’t load the menu.</Text>
@@ -597,6 +612,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     return (
       <View style={[styles.root, { paddingTop: insets.top }]}>
         <View style={styles.tabletBar}>
+          {backButton}
           <View style={styles.brandRow}>
             <BrandMark size={22} />
             <Text style={styles.brand}>Smart Serve</Text>
@@ -649,6 +665,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       {/* App header */}
       <View style={styles.appBar}>
         <View style={styles.brandRow}>
+          {backButton}
           <BrandMark size={20} />
           <Text style={styles.brand}>Smart Serve</Text>
         </View>
@@ -749,6 +766,42 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   );
 }
 
+/**
+ * The menu grid one beat before it arrives: same column count, same square
+ * photo, same two lines beneath it — so the real cards land where the grey
+ * ones stood instead of pushing the layout around.
+ *
+ * Four rows is more than a phone can show; the extra is clipped rather than
+ * measured, which keeps this free of a layout pass on the frame where the
+ * screen is already busy mounting.
+ */
+function MenuGridSkeleton({ columns }: { columns: number }) {
+  return (
+    <Skeleton style={styles.skeletonWrap}>
+      {Array.from({ length: 4 }, (_, row) => (
+        <View key={row} style={styles.gridRow}>
+          {Array.from({ length: columns }, (_, col) => (
+            <View key={col} style={styles.gridCell}>
+              <View style={styles.skeletonCard}>
+                <Bone
+                  width="100%"
+                  height="auto"
+                  round={0}
+                  style={styles.skeletonPhoto}
+                />
+                <View style={styles.skeletonBody}>
+                  <Bone width="80%" height={13} />
+                  <Bone width="45%" height={13} />
+                </View>
+              </View>
+            </View>
+          ))}
+        </View>
+      ))}
+    </Skeleton>
+  );
+}
+
 function Chip({
   label,
   active,
@@ -796,6 +849,9 @@ const styles = StyleSheet.create({
     paddingVertical: space.s3,
   },
   brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
+  // Pulled back by its own padding so the chevron optically lines up with the
+  // bar's edge while still presenting a full-size target.
+  backBtn: { padding: space.s1, marginLeft: -space.s2 },
   brand: {
     fontFamily: fonts.extrabold,
     fontSize: 18,
@@ -926,6 +982,31 @@ const styles = StyleSheet.create({
   gridCell: {
     flex: 1,
   },
+
+  // ── Loading placeholder ─────────────────────────────────────────────────
+  // Mirrors `gridContent` + `gridRow` + `OrderMenuCard`'s own surface, so the
+  // swap to real cards moves nothing.
+  skeletonWrap: {
+    flex: 1,
+    overflow: "hidden",
+    paddingHorizontal: space.s4,
+    paddingTop: space.s2,
+  },
+  skeletonCard: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radius.xl,
+    overflow: "hidden",
+    ...shadow.float,
+  },
+  skeletonPhoto: {
+    aspectRatio: 1,
+  },
+  skeletonBody: {
+    padding: space.s3,
+    gap: space.s2,
+  },
+
   center: {
     flex: 1,
     alignItems: "center",

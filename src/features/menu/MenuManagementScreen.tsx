@@ -7,7 +7,6 @@
  */
 import { useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Alert,
   Pressable,
   ScrollView,
@@ -19,6 +18,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { feel, feelToggle } from "@/lib/feedback";
 import { gridColumns, useResponsive } from "@/lib/responsive";
+import { Bone, Skeleton } from "@/components/Skeleton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { deleteMenuItem, setMenuItemEnabled } from "./menuApi";
 import { useMenuCategories, useMenuItems } from "./useMenuData";
@@ -244,9 +244,7 @@ export function MenuManagementScreen() {
 
       {/* Content */}
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
+        <MenuSkeleton cellWidth={cellWidth} />
       ) : errorState ? (
         <View style={styles.center}>
           <Text style={styles.errorText}>{errorState.message}</Text>
@@ -317,6 +315,42 @@ export function MenuManagementScreen() {
         onClose={() => setCategoryManagerVisible(false)}
       />
     </View>
+  );
+}
+
+/**
+ * Two categories' worth of grey cards, at the same cell width the real grid
+ * will use — so the menu resolves into place rather than replacing a spinner
+ * with a screenful of content.
+ */
+function MenuSkeleton({ cellWidth }: { cellWidth: `${number}%` }) {
+  return (
+    <Skeleton style={styles.skeletonWrap}>
+      {[0, 1].map((section) => (
+        <View key={section} style={styles.section}>
+          <Bone width={132} height={18} style={styles.skeletonSectionTitle} />
+          <View style={styles.grid}>
+            {Array.from({ length: 6 }, (_, i) => (
+              <View key={i} style={[styles.gridCell, { width: cellWidth }]}>
+                <View style={styles.skeletonCard}>
+                  <Bone
+                    width="100%"
+                    height="auto"
+                    round={0}
+                    style={styles.skeletonPhoto}
+                  />
+                  <View style={styles.skeletonBody}>
+                    <Bone width="85%" height={13} />
+                    <Bone width="40%" height={13} />
+                    <Bone width="60%" height={10} />
+                  </View>
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
+      ))}
+    </Skeleton>
   );
 }
 
@@ -437,6 +471,34 @@ const styles = StyleSheet.create({
     // Width is set per-render from the window — see `cellWidth`.
     paddingHorizontal: space.s2,
     marginBottom: space.s3,
+  },
+
+  // ── Loading placeholder ─────────────────────────────────────────────────
+  // Reuses `section`/`grid`/`gridCell` above and mirrors MenuItemCard's own
+  // surface, so the real cards land exactly where the grey ones stood.
+  skeletonWrap: {
+    flex: 1,
+    overflow: "hidden",
+    paddingHorizontal: space.s4,
+    paddingTop: space.s2,
+  },
+  skeletonSectionTitle: {
+    marginBottom: space.s3,
+  },
+  skeletonCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...shadow.card,
+  },
+  skeletonPhoto: {
+    aspectRatio: 1,
+  },
+  skeletonBody: {
+    padding: space.s3,
+    gap: space.s1,
   },
   center: {
     paddingVertical: space.s6,

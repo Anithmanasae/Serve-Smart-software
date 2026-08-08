@@ -24,6 +24,11 @@ export const colors = {
   border: "#e5e7eb",
   borderStrong: "#d1d5db",
 
+  // Skeleton bones. Deliberately a touch darker than `border` and cooler than
+  // `surfaceMuted`: a placeholder has to read on the white card AND on the
+  // gray canvas, and every loading screen puts both behind it.
+  skeleton: "#e4e7ec",
+
   navySoft: "#e2ebfa",
   navyText: "#0047A1",
 

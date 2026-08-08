@@ -52,8 +52,11 @@ app/                      # expo-router routes (thin — render feature screens)
   index.tsx               # role redirect               (DONE)
   login.tsx               # RN login                    (DONE)
   (app)/_layout.tsx       # auth guard + Stack          (DONE)
-  (app)/{menu,tables,kds,bills,insights}.tsx
-  (app)/order/{index,[tableId]}.tsx
+  (app)/(tabs)/_layout.tsx  # bottom tab bar            (DONE)
+  (app)/(tabs)/{menu,tables,kds,bills,insights,account}.tsx
+  (app)/(tabs)/order/index.tsx        # takeaway (a tab)
+  (app)/order/[tableId].tsx           # a table's order — PUSHED
+  (app)/{bill-history,staff,tables-setup,offers}.tsx  # also pushed
 src/
   theme/theme.ts          # design tokens (colors/space/radius)
   config/tax.ts           # GST config
@@ -73,6 +76,13 @@ Route files in `app/(app)/` should stay thin and render the feature screen,
 e.g. `export default function MenuRoute(){ return <MenuManagementScreen/> }`.
 The wiring is done by the integrator (the parent), not the screen agents —
 build and export your screen from `src/features/<x>/index.ts`.
+
+**Where a new route goes.** `(app)/_layout.tsx` is a Stack whose first screen
+is the tab navigator. A module the user switches *to* is a tab, inside
+`(tabs)/`. A screen the user opens *from* somewhere — a detail, a settings
+page, a form that takes over — goes beside `(tabs)`, so it pushes in from the
+right, pops back, and hides the tab bar while it is open. A pushed screen must
+draw its own way back; there is no header.
 
 ## Design specs
 

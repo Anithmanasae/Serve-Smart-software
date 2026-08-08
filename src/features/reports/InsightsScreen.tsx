@@ -13,7 +13,6 @@
  */
 import { useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,6 +20,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Bone, Skeleton } from "@/components/Skeleton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { formatMoney } from "@/lib/money";
 import { formatDayKeyFull, formatDayKeyShort } from "@/lib/date";
@@ -325,9 +325,7 @@ export function InsightsScreen() {
       </View>
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
+        <InsightsSkeleton tab={tab} kpiWidth={kpiWidth} wide={isTablet} />
       ) : error ? (
         <View style={styles.center}>
           <Text style={styles.errorText}>{error.message}</Text>
@@ -636,6 +634,88 @@ export function InsightsScreen() {
   );
 }
 
+/** One grey card with a title and `rows` list lines, the shape both tabs
+ *  repeat down the page. */
+function SkeletonCard({ rows }: { rows: number }) {
+  return (
+    <View style={styles.card}>
+      <Bone width={148} height={16} />
+      {Array.from({ length: rows }, (_, i) => (
+        <View key={i} style={styles.sourceRow}>
+          <Bone width="45%" height={13} />
+          <View style={styles.skeletonSpacer} />
+          <Bone width={72} height={13} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/**
+ * Insights mid-load, branched on the tab because the two are shaped nothing
+ * alike: Analytics opens on a KPI grid and a chart, Reports on stacked
+ * tables. Showing one skeleton for both would put the tiles somewhere the
+ * user is about to find a table, which is worse than a spinner.
+ */
+function InsightsSkeleton({
+  tab,
+  kpiWidth,
+  wide,
+}: {
+  tab: Tab;
+  kpiWidth: `${number}%`;
+  wide: boolean;
+}) {
+  return (
+    <Skeleton
+      style={[
+        styles.scrollContent,
+        styles.skeletonWrap,
+        wide && styles.scrollContentWide,
+      ]}
+    >
+      {tab === "analytics" ? (
+        <>
+          <View style={styles.kpiGrid}>
+            {Array.from({ length: 6 }, (_, i) => (
+              <View key={i} style={[styles.kpiCell, { width: kpiWidth }]}>
+                <View style={styles.card}>
+                  <Bone width="70%" height={13} />
+                  <Bone
+                    width="55%"
+                    height={22}
+                    style={styles.skeletonKpiValue}
+                  />
+                  <Bone
+                    width={54}
+                    height={16}
+                    round={radius.pill}
+                    style={styles.skeletonKpiPill}
+                  />
+                </View>
+              </View>
+            ))}
+          </View>
+          {/* Revenue Over Time — the chart is the tallest thing on the page
+              and the one whose absence would collapse the scroll. */}
+          <View style={styles.card}>
+            <Bone width={168} height={16} />
+            <Bone width={96} height={12} style={styles.skeletonCaption} />
+            <Bone height={168} round={radius.md} />
+          </View>
+          <SkeletonCard rows={4} />
+        </>
+      ) : (
+        <>
+          <SkeletonCard rows={3} />
+          <SkeletonCard rows={5} />
+          <SkeletonCard rows={3} />
+        </>
+      )}
+    </Skeleton>
+  );
+}
+
 function SummaryStat({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.summaryStat}>
@@ -781,6 +861,15 @@ const styles = StyleSheet.create({
     padding: space.s4,
     ...shadow.card,
   },
+
+  // ── Loading placeholder ─────────────────────────────────────────────────
+  // Reuses `scrollContent`, `kpiGrid`, `kpiCell`, `card` and `sourceRow`, so
+  // the report drops into the frame the bones were already holding.
+  skeletonWrap: { flex: 1, overflow: "hidden" },
+  skeletonKpiValue: { marginTop: space.s2 },
+  skeletonKpiPill: { marginTop: space.s3 },
+  skeletonCaption: { marginTop: space.s1, marginBottom: space.s3 },
+  skeletonSpacer: { flex: 1 },
   cardTitle: {
     fontSize: 16,
     fontWeight: "700",

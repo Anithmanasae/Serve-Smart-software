@@ -15,7 +15,6 @@
  */
 import { useMemo, useState } from "react";
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   StyleSheet,
@@ -31,6 +30,7 @@ import { feel } from "@/lib/feedback";
 import { useResponsive } from "@/lib/responsive";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
+import { Bone, Skeleton } from "@/components/Skeleton";
 import type { Kot } from "@/types/models";
 import {
   completedGroups,
@@ -229,21 +229,22 @@ export function KitchenDisplayScreen() {
       </View>
 
       {/* Board */}
-      {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      ) : error ? (
+      {error ? (
         <View style={styles.center}>
           <Text style={styles.errorText}>Couldn’t load tickets.</Text>
           <Text style={styles.emptySub}>{error.message}</Text>
         </View>
       ) : (
+        // The board measures itself before either state draws, so the grey
+        // tickets are laid out on exactly the grid the real ones will use.
         <View
           style={styles.gridWrap}
           onLayout={(e) => setGridH(e.nativeEvent.layout.height)}
         >
-          {cardH > 0 && (
+          {cardH > 0 && loading && (
+            <BoardSkeleton cols={cols} rows={rows} cardH={cardH} />
+          )}
+          {cardH > 0 && !loading && (
             <FlatList
               // RN cannot change `numColumns` on a live list — remounting on
               // the count is what lets the board re-flow across a rotation.
@@ -289,6 +290,51 @@ export function KitchenDisplayScreen() {
         />
       )}
     </View>
+  );
+}
+
+/**
+ * The board mid-load: a full grid of grey tickets at the measured `cardH`.
+ *
+ * Filling every slot rather than showing three is deliberate here — a KDS is
+ * read from across a kitchen as "how much work is on", and a half-empty grey
+ * board would answer that question wrongly for the second or two before the
+ * real tickets arrive. A full one says only "not yet".
+ */
+function BoardSkeleton({
+  cols,
+  rows,
+  cardH,
+}: {
+  cols: number;
+  rows: number;
+  cardH: number;
+}) {
+  return (
+    <Skeleton style={styles.skeletonBoard}>
+      {Array.from({ length: rows }, (_, r) => (
+        <View key={r} style={styles.skeletonRow}>
+          {Array.from({ length: cols }, (_, c) => (
+            <View key={c} style={[styles.cell, { height: cardH }]}>
+              <View style={styles.skeletonCard}>
+                {/* The queue-position stripe TableTicketCard paints in its
+                    status colour. */}
+                <Bone width={20} height="100%" round={0} />
+                <View style={styles.skeletonBody}>
+                  <View style={styles.skeletonHeader}>
+                    <Bone width={52} height={15} />
+                    <Bone width={28} height={11} />
+                  </View>
+                  <Bone width="92%" height={10} />
+                  <Bone width="74%" height={10} />
+                  <Bone width="84%" height={10} />
+                </View>
+              </View>
+            </View>
+          ))}
+        </View>
+      ))}
+    </Skeleton>
   );
 }
 
@@ -433,6 +479,40 @@ const styles = StyleSheet.create({
   },
   cell: {
     flex: 1,
+  },
+
+  // ── Loading placeholder ─────────────────────────────────────────────────
+  // `skeletonRow` is `gridRow` plus the row direction FlatList supplies for
+  // free via `columnWrapperStyle`; `skeletonCard` is TableTicketCard's frame.
+  skeletonBoard: {
+    flex: 1,
+    overflow: "hidden",
+  },
+  skeletonRow: {
+    flexDirection: "row",
+    gap: GAP,
+    marginBottom: GAP,
+  },
+  skeletonCard: {
+    flex: 1,
+    flexDirection: "row",
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  skeletonBody: {
+    flex: 1,
+    paddingHorizontal: space.s2,
+    paddingVertical: space.s2,
+    gap: space.s2,
+  },
+  skeletonHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: space.s1,
   },
   center: {
     flex: 1,

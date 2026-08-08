@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { formatMoney } from "@/lib/money";
 import { useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
+import { Bone, Skeleton } from "@/components/Skeleton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import type { Bill, Order, Table } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -152,57 +153,63 @@ export function BillsScreen() {
         </View>
       </View>
 
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) =>
-          item.kind === "bill"
-            ? `b:${item.bill.id}`
-            : item.kind === "order"
-              ? `o:${item.order.id}`
-              : `p:${item.order.id}`
-        }
-        stickySectionHeadersEnabled={false}
-        contentContainerStyle={[
-          styles.list,
-          // Bills are a chronological ledger, so they stay one column and get
-          // a reading width instead: a card stretched across a tablet puts the
-          // table label and the amount too far apart to pair by eye.
-          isTablet && styles.listReadingWidth,
-          { paddingBottom: insets.bottom + space.s6 },
-        ]}
-        renderSectionHeader={({ section }) => (
-          <Text style={styles.sectionHeader}>{section.title}</Text>
-        )}
-        renderItem={({ item }) =>
-          item.kind === "bill" ? (
-            <BillCard
-              bill={item.bill}
-              now={now}
-              onPress={() => setSelectedBillId(item.bill.id)}
-            />
-          ) : item.kind === "order" ? (
-            <OrderCard
-              order={item.order}
-              label={orderLabel(item.order)}
-              now={now}
-              busy={generatingId === item.order.id}
-              disabled={generatingId !== null}
-              onPress={() => handleGenerate(item.order)}
-            />
-          ) : (
-            <PreparingCard
-              order={item.order}
-              label={orderLabel(item.order)}
-              now={now}
-            />
-          )
-        }
-        ListEmptyComponent={
-          <Text style={styles.empty}>
-            {loading ? "Loading bills…" : "No bills to settle right now."}
-          </Text>
-        }
-      />
+      {/* Two snapshots have to land before there is a ledger to show, so the
+          first paint is bones rather than the empty-state line — which used
+          to say "Loading bills…" and read as "you have no bills". */}
+      {loading && sections.length === 0 ? (
+        <BillsSkeleton wide={isTablet} bottomInset={insets.bottom} />
+      ) : (
+        <SectionList
+          sections={sections}
+          keyExtractor={(item) =>
+            item.kind === "bill"
+              ? `b:${item.bill.id}`
+              : item.kind === "order"
+                ? `o:${item.order.id}`
+                : `p:${item.order.id}`
+          }
+          stickySectionHeadersEnabled={false}
+          contentContainerStyle={[
+            styles.list,
+            // Bills are a chronological ledger, so they stay one column and
+            // get a reading width instead: a card stretched across a tablet
+            // puts the table label and the amount too far apart to pair by
+            // eye.
+            isTablet && styles.listReadingWidth,
+            { paddingBottom: insets.bottom + space.s6 },
+          ]}
+          renderSectionHeader={({ section }) => (
+            <Text style={styles.sectionHeader}>{section.title}</Text>
+          )}
+          renderItem={({ item }) =>
+            item.kind === "bill" ? (
+              <BillCard
+                bill={item.bill}
+                now={now}
+                onPress={() => setSelectedBillId(item.bill.id)}
+              />
+            ) : item.kind === "order" ? (
+              <OrderCard
+                order={item.order}
+                label={orderLabel(item.order)}
+                now={now}
+                busy={generatingId === item.order.id}
+                disabled={generatingId !== null}
+                onPress={() => handleGenerate(item.order)}
+              />
+            ) : (
+              <PreparingCard
+                order={item.order}
+                label={orderLabel(item.order)}
+                now={now}
+              />
+            )
+          }
+          ListEmptyComponent={
+            <Text style={styles.empty}>No bills to settle right now.</Text>
+          }
+        />
+      )}
 
       <Modal
         visible={selectedBillId !== null}
@@ -220,6 +227,52 @@ export function BillsScreen() {
         )}
       </Modal>
     </View>
+  );
+}
+
+/**
+ * Two sections of grey bill cards.
+ *
+ * This one earns its keep more than most: the cashier opens Bills first thing
+ * and it is the tab that waits on two snapshots at once (`useActiveBills` and
+ * `useBillableOrders`), so the old "Loading bills…" line was the app's longest
+ * blank moment. The card shape below is `styles.card` itself, so nothing
+ * shifts when the ledger arrives.
+ */
+function BillsSkeleton({
+  wide,
+  bottomInset,
+}: {
+  wide: boolean;
+  bottomInset: number;
+}) {
+  return (
+    <Skeleton
+      style={[
+        styles.list,
+        styles.skeletonWrap,
+        wide && styles.listReadingWidth,
+        { paddingBottom: bottomInset + space.s6 },
+      ]}
+    >
+      {[3, 2].map((count, section) => (
+        <View key={section}>
+          <Bone width={96} height={11} style={styles.skeletonSectionHeader} />
+          {Array.from({ length: count }, (_, i) => (
+            <View key={i} style={styles.card}>
+              <View style={styles.cardTop}>
+                <Bone width={64} height={17} />
+                <Bone width={78} height={18} round={radius.pill} />
+              </View>
+              <View style={styles.cardBottom}>
+                <Bone width={92} height={18} />
+                <Bone width={54} height={12} />
+              </View>
+            </View>
+          ))}
+        </View>
+      ))}
+    </Skeleton>
   );
 }
 
@@ -391,6 +444,15 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     padding: space.s6,
     fontSize: 14,
+  },
+
+  // ── Loading placeholder ─────────────────────────────────────────────────
+  // Sits where the SectionList's own content would; `card`, `cardTop` and
+  // `cardBottom` below are shared with the real rows.
+  skeletonWrap: { flex: 1, overflow: "hidden" },
+  skeletonSectionHeader: {
+    marginTop: space.s4,
+    marginBottom: space.s2 + 4,
   },
 
   card: {
