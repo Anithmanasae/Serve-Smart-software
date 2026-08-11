@@ -181,11 +181,11 @@ const styles = StyleSheet.create({
   rowLabel: {
     flexShrink: 1,
     fontFamily: fonts.semibold,
-    fontSize: 14,
+    fontSize: 16,
     color: colors.text,
   },
   rowLabelCompact: {
-    fontSize: 13,
+    fontSize: 15,
   },
   rowLabelActive: {
     fontFamily: fonts.extrabold,
