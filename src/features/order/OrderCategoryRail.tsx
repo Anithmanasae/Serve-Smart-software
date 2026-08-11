@@ -1,16 +1,10 @@
 /**
- * The left-hand category rail — on the tablet AND, since the redesign, on the
- * phone.
+ * The tablet's left-hand category rail.
  *
- * It replaced a row of horizontal chips, which is the change worth explaining:
- * chips put the categories on ONE axis with the grid's own scroll, so finding
- * "Desserts" meant swiping sideways through a strip that gave no clue how much
- * was off-screen. A vertical rail shows the whole menu's shape at once and
- * costs only the width of the words — on a phone the grid drops from two
- * columns to a comfortable one-and-a-bit, which is a fair trade for never
- * hunting for a category again.
- *
- * The rail owns nothing but which id is active; selection drives the grid.
+ * The same choice the phone offers as horizontal chips, given the vertical
+ * space a tablet actually has: one tall list, every category legible at once,
+ * no swiping to discover that "Desserts" exists. Selection drives the centre
+ * grid — the rail owns nothing but which id is active.
  *
  * Counts are of ENABLED items only, so the number next to a category matches
  * what tapping it will show. A category whose items are all disabled still
@@ -32,16 +26,6 @@ interface OrderCategoryRailProps {
   totalCount: number;
   activeId: string;
   onSelect: (id: string) => void;
-  /**
-   * Phone. Trims the rail's own padding and drops a point of type, so the
-   * width it costs the grid buys category NAME rather than whitespace — the
-   * card beside it is only ~110dp and cannot spare any.
-   *
-   * Row height is NOT reduced: 48dp is a touch target, and this is a control
-   * a waiter hits all shift with a thumb, on the hand that is also holding
-   * the tablet.
-   */
-  compact?: boolean;
 }
 
 function OrderCategoryRailImpl({
@@ -50,13 +34,10 @@ function OrderCategoryRailImpl({
   totalCount,
   activeId,
   onSelect,
-  compact,
 }: OrderCategoryRailProps) {
   return (
-    <View style={[styles.rail, compact && styles.railCompact]}>
-      <Text style={[styles.heading, compact && styles.headingCompact]}>
-        Categories
-      </Text>
+    <View style={styles.rail}>
+      <Text style={styles.heading}>Categories</Text>
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.list}
@@ -65,7 +46,6 @@ function OrderCategoryRailImpl({
           label="All Items"
           count={totalCount}
           active={activeId === ALL_CATEGORIES}
-          compact={compact}
           onPress={() => onSelect(ALL_CATEGORIES)}
         />
         {categories.map((c) => (
@@ -74,7 +54,6 @@ function OrderCategoryRailImpl({
             label={c.name}
             count={countByCategory.get(c.id) ?? 0}
             active={activeId === c.id}
-            compact={compact}
             onPress={() => onSelect(c.id)}
           />
         ))}
@@ -87,33 +66,24 @@ function RailRow({
   label,
   count,
   active,
-  compact,
   onPress,
 }: {
   label: string;
   count: number;
   active: boolean;
-  compact?: boolean;
   onPress: () => void;
 }) {
   return (
     <Pressable
       style={({ pressed }) => [
         styles.row,
-        compact && styles.rowCompact,
         active && styles.rowActive,
         pressed && !active && styles.rowPressed,
       ]}
       onPress={onPress}
-      accessibilityRole="tab"
-      accessibilityState={{ selected: active }}
     >
       <Text
-        style={[
-          styles.rowLabel,
-          compact && styles.rowLabelCompact,
-          active && styles.rowLabelActive,
-        ]}
+        style={[styles.rowLabel, active && styles.rowLabelActive]}
         numberOfLines={2}
       >
         {label}
@@ -133,10 +103,6 @@ const styles = StyleSheet.create({
     paddingLeft: space.s3,
     paddingRight: space.s2,
   },
-  railCompact: {
-    paddingLeft: space.s2,
-    paddingRight: space.s1,
-  },
   heading: {
     fontFamily: fonts.bold,
     fontSize: 11,
@@ -145,10 +111,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     paddingHorizontal: space.s3,
     paddingBottom: space.s2,
-  },
-  headingCompact: {
-    paddingHorizontal: space.s2,
-    letterSpacing: 0.5,
   },
   list: {
     gap: space.s1,
@@ -165,15 +127,8 @@ const styles = StyleSheet.create({
     paddingVertical: space.s2,
     borderRadius: radius.md,
   },
-  rowCompact: {
-    gap: space.s1,
-    paddingHorizontal: space.s2,
-  },
-  // Solid, not tinted. The rail sits directly against the grid of white
-  // cards, and a soft wash reads there as "slightly different card" rather
-  // than as the one row driving everything to its right.
   rowActive: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primarySoft,
   },
   rowPressed: {
     backgroundColor: colors.surfaceMuted,
@@ -181,15 +136,14 @@ const styles = StyleSheet.create({
   rowLabel: {
     flexShrink: 1,
     fontFamily: fonts.semibold,
+    // Matched to the phone's chip text, so the same category reads at the
+    // same weight whichever device it is on.
     fontSize: 16,
     color: colors.text,
   },
-  rowLabelCompact: {
-    fontSize: 15,
-  },
   rowLabelActive: {
     fontFamily: fonts.extrabold,
-    color: colors.textInverse,
+    color: colors.primary,
   },
   rowCount: {
     fontFamily: fonts.semibold,
@@ -197,7 +151,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   rowCountActive: {
-    color: colors.textInverse,
-    opacity: 0.75,
+    color: colors.primary,
   },
 });

@@ -6,12 +6,6 @@
  * price.
  * When the item is an un-sent line in the current order the circular `+` add
  * button becomes a soft-gray `−  qty  +` stepper. Steppers spring on press.
- *
- * An item with OPTIONS keeps the same circular `+`, but the press opens the
- * Customize sheet instead of adding: picking one of several prices is the
- * guest's call, not the card's. Such a card never shows the stepper either —
- * its qty is the total across every option, so `−` would have no one line to
- * take a unit from.
  */
 import { memo } from "react";
 import { StyleSheet, Text, View } from "react-native";
@@ -20,7 +14,6 @@ import { Feather } from "@expo/vector-icons";
 import { formatMoney } from "@/lib/money";
 import { PressableScale } from "@/components/PressableScale";
 import { resolveMenuImage } from "@/features/menu/menuImages";
-import { hasVariants } from "@/features/menu/variants";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import type { MenuItem } from "@/types/models";
 
@@ -37,8 +30,6 @@ interface OrderMenuCardProps {
   offerEligible?: boolean;
   onAdd: () => void;
   onDecrement: () => void;
-  /** Open the Customize sheet: options, quantity and remarks. */
-  onCustomize: () => void;
   disabled?: boolean;
 }
 
@@ -49,11 +40,9 @@ function OrderMenuCardImpl({
   offerEligible,
   onAdd,
   onDecrement,
-  onCustomize,
   disabled,
 }: OrderMenuCardProps) {
-  const optioned = hasVariants(item);
-  const inOrder = qty > 0 && !optioned;
+  const inOrder = qty > 0;
   const imageSource = resolveMenuImage(item.id, item.imageUrl);
   return (
     <View style={styles.card}>
@@ -121,15 +110,8 @@ function OrderMenuCardImpl({
             <PressableScale
               hitSlop={8}
               style={[styles.addBtn, disabled && styles.addBtnDisabled]}
-              // Options open a sheet, so that press is felt as something
-              // opening; a plain add is an ordinary tap.
-              haptic={optioned ? "press" : "tap"}
-              onPress={optioned ? onCustomize : onAdd}
+              onPress={onAdd}
               disabled={disabled}
-              accessibilityRole="button"
-              accessibilityLabel={
-                optioned ? `Choose an option for ${item.name}` : `Add ${item.name}`
-              }
             >
               <Text style={styles.addGlyph}>＋</Text>
             </PressableScale>
