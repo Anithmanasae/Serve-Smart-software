@@ -14,7 +14,7 @@ import {
 import { AuthProvider } from "@/features/auth/AuthContext";
 import { SettingsProvider } from "@/features/settings/SettingsContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Loading } from "@/components/Loading";
+import { BrandSplash } from "@/components/BrandSplash";
 
 // Off-screen routes stop re-rendering on Firestore snapshots (with the tab
 // navigator's freezeOnBlur) — must be set before any screen renders.
@@ -34,7 +34,7 @@ export default function RootLayout() {
     PlusJakartaSans_800ExtraBold,
     ...Ionicons.font,
   });
-  if (!fontsLoaded && !fontError) return <Loading />;
+  if (!fontsLoaded && !fontError) return <BrandSplash />;
 
   return (
     <SafeAreaProvider>

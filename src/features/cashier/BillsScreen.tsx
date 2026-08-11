@@ -28,6 +28,7 @@ import { feel } from "@/lib/feedback";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
+import { BrandHeader } from "@/components/BrandHeader";
 import type { Bill, Order, Table } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
@@ -138,6 +139,7 @@ export function BillsScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <BrandHeader />
       {/* Header — cashier identity */}
       <View style={styles.header}>
         <View style={styles.avatar}>

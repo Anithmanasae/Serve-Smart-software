@@ -24,6 +24,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
+import { BrandHeader } from "@/components/BrandHeader";
 import { formatMoney } from "@/lib/money";
 import { formatDayKeyFull, formatDayKeyShort } from "@/lib/date";
 import { feel } from "@/lib/feedback";
@@ -226,6 +227,7 @@ export function InsightsScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <BrandHeader />
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerText}>

@@ -38,6 +38,7 @@ import { useOffers } from "@/features/offers/useOffersData";
 import { animateNextLayout, feel } from "@/lib/feedback";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
+import { BrandHeader } from "@/components/BrandHeader";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
@@ -663,14 +664,10 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
       {/* App header */}
-      <View style={styles.appBar}>
-        <View style={styles.brandRow}>
-          {backButton}
-          <BrandMark size={32} />
-          <Text style={styles.brand}>Brew Brothers</Text>
-        </View>
-        <Text style={styles.bell}>🔔</Text>
-      </View>
+      <BrandHeader
+        left={backButton}
+        right={<Text style={styles.bell}>🔔</Text>}
+      />
 
       {/* Title */}
       <View style={styles.titleBlock}>
@@ -841,23 +838,18 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.7,
   },
-  appBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: space.s4,
-    paddingVertical: space.s3,
-  },
   brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
   // Pulled back by its own padding so the chevron optically lines up with the
   // bar's edge while still presenting a full-size target.
   backBtn: { padding: space.s1, marginLeft: -space.s2 },
+  // The tablet bar sets the name itself (it interleaves the title and the
+  // table pill on one row), so it restates BrandHeader's type rather than
+  // using it. Keep these two in step.
   brand: {
     fontFamily: fonts.extrabold,
-    fontSize: 18,
-    // Near-black rather than navy — see the note in KitchenDisplayScreen.
+    fontSize: 20,
     color: colors.text,
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
   bell: {
     fontSize: 18,

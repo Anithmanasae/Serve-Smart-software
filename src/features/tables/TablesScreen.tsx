@@ -27,6 +27,7 @@ import { formatMoney } from "@/lib/money";
 import { gridColumns, useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { colors, fonts, radius, space } from "@/theme/theme";
+import { BrandHeader } from "@/components/BrandHeader";
 import type { Kot, Order, OrderItem, Table, TableStatus } from "@/types/models";
 import { ProfileButton } from "@/components/ProfileButton";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -195,6 +196,7 @@ export function TablesScreen() {
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <BrandHeader />
       <View style={styles.header}>
         <View style={styles.headerText}>
           <Text style={styles.title}>Tables</Text>

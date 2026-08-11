@@ -21,6 +21,7 @@ import { gridColumns, useResponsive } from "@/lib/responsive";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
+import { BrandHeader } from "@/components/BrandHeader";
 import { deleteMenuItem, setMenuItemEnabled } from "./menuApi";
 import { useMenuCategories, useMenuItems } from "./useMenuData";
 import type { MenuCategoryDoc, MenuItemDoc } from "./useMenuData";
@@ -156,6 +157,7 @@ export function MenuManagementScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
+      <BrandHeader />
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerText}>

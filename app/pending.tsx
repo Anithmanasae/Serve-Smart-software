@@ -2,7 +2,7 @@ import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
 import { Redirect } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
 import { homePathForRole } from "@/features/auth/roleRoutes";
-import { Loading } from "@/components/Loading";
+import { BrandSplash } from "@/components/BrandSplash";
 import {
   CONTACT_NAME,
   activationRequestMessage,
@@ -27,7 +27,7 @@ export default function Pending() {
   const { firebaseUser, profile, gate, loading, signOut, restaurantName } =
     useAuth();
 
-  if (loading) return <Loading />;
+  if (loading) return <BrandSplash />;
   // Approved (or activated) while looking at this screen → straight in.
   if (profile) return <Redirect href={homePathForRole(profile.role)} />;
   if (!firebaseUser || !gate) return <Redirect href="/login" />;

@@ -29,7 +29,7 @@ import { startOfDayIST } from "@/lib/date";
 import { feel } from "@/lib/feedback";
 import { useResponsive } from "@/lib/responsive";
 import { colors, fonts, radius, space } from "@/theme/theme";
-import { BrandMark } from "@/components/BrandLogo";
+import { BrandHeader } from "@/components/BrandHeader";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import type { Kot } from "@/types/models";
@@ -184,19 +184,16 @@ export function KitchenDisplayScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* App header */}
-      <View style={styles.appBar}>
-        <View style={styles.brandRow}>
-          <BrandMark size={34} />
-          <Text style={styles.brand}>Brew Brothers</Text>
-        </View>
-        {/* Kitchen staff see only this tab, so this is their one route to
-            printer settings and sign-out. */}
-        <View style={styles.appBarEnd}>
-          <Text style={styles.kitchenTag}>KITCHEN</Text>
-          <ProfileButton />
-        </View>
-      </View>
+      {/* App header. Kitchen staff see only this tab, so the profile button
+          here is their one route to printer settings and sign-out. */}
+      <BrandHeader
+        right={
+          <View style={styles.appBarEnd}>
+            <Text style={styles.kitchenTag}>KITCHEN</Text>
+            <ProfileButton />
+          </View>
+        }
+      />
 
       {/* Status filter bar — underline marks the active tab */}
       <View style={styles.tabs}>
@@ -399,24 +396,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  appBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: space.s4,
-    paddingVertical: space.s3,
-  },
-  brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
   appBarEnd: { flexDirection: "row", alignItems: "center", gap: space.s3 },
-  brand: {
-    fontFamily: fonts.extrabold,
-    fontSize: 20,
-    // Near-black rather than the app's navy: the mark beside it is gold on
-    // black, and navy against that reads as two brands sharing a row. Neutral
-    // ink sits under both the logo's gold and the navy UI below.
-    color: colors.text,
-    letterSpacing: 0.3,
-  },
   kitchenTag: {
     fontFamily: fonts.extrabold,
     fontSize: 12,

@@ -1,6 +1,6 @@
 import { Redirect, Stack } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
-import { Loading } from "@/components/Loading";
+import { BrandSplash } from "@/components/BrandSplash";
 
 /**
  * Authenticated area: requires a signed-in, active profile.
@@ -23,7 +23,7 @@ import { Loading } from "@/components/Loading";
  */
 export default function AppLayout() {
   const { profile, gate, loading } = useAuth();
-  if (loading) return <Loading />;
+  if (loading) return <BrandSplash />;
   // Restricted/removed mid-shift → the live profile listener lands here and
   // kicks the device out to the gate screen instantly.
   if (gate) return <Redirect href="/pending" />;
