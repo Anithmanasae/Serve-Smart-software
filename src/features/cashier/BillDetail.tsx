@@ -275,7 +275,7 @@ export function BillDetail({
       try {
         const paperWidth = await getPaperWidth();
         const receipt = encodeReceipt({
-          profile: restaurant ?? { name: "Smart Serve" },
+          profile: restaurant ?? { name: "Brew Brothers" },
           bill,
           order,
           cashierName: cashierProfile?.name ?? "-",
@@ -329,7 +329,7 @@ export function BillDetail({
     feel.press(); // handing off to another app
     const text = encodeURIComponent(
       formatWhatsAppReceipt({
-        profile: restaurant ?? { name: "Smart Serve" },
+        profile: restaurant ?? { name: "Brew Brothers" },
         bill,
         order,
         paymentLabel: bill.paymentMode

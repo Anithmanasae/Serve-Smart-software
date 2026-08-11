@@ -71,7 +71,7 @@ export default function Pending() {
     expired: {
       icon: "⌛",
       title: "Your free trial has ended",
-      body: "Thanks for trying Smart Serve. Your menu, tables and settings are all still saved — nothing has been deleted. Get in touch to activate your restaurant and pick up exactly where you left off.",
+      body: "Thanks for trying Brew Brothers. Your menu, tables and settings are all still saved — nothing has been deleted. Get in touch to activate your restaurant and pick up exactly where you left off.",
     },
   }[gate];
 

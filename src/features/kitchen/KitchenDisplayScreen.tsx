@@ -188,7 +188,7 @@ export function KitchenDisplayScreen() {
       <View style={styles.appBar}>
         <View style={styles.brandRow}>
           <BrandMark size={22} />
-          <Text style={styles.brand}>Smart Serve</Text>
+          <Text style={styles.brand}>Brew Brothers</Text>
         </View>
         {/* Kitchen staff see only this tab, so this is their one route to
             printer settings and sign-out. */}
@@ -411,7 +411,10 @@ const styles = StyleSheet.create({
   brand: {
     fontFamily: fonts.extrabold,
     fontSize: 20,
-    color: colors.primary,
+    // Near-black rather than the app's navy: the mark beside it is gold on
+    // black, and navy against that reads as two brands sharing a row. Neutral
+    // ink sits under both the logo's gold and the navy UI below.
+    color: colors.text,
     letterSpacing: 0.3,
   },
   kitchenTag: {

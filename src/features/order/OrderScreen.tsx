@@ -516,7 +516,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       if (!kot) return;
       const paperWidth = await getPaperWidth();
       const ticket = encodeKot({
-        profile: restaurant ?? { name: "Smart Serve" },
+        profile: restaurant ?? { name: "Brew Brothers" },
         kot,
         paperWidth,
       });
@@ -747,7 +747,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
           {backButton}
           <View style={styles.brandRow}>
             <BrandMark size={22} />
-            <Text style={styles.brand}>Smart Serve</Text>
+            <Text style={styles.brand}>Brew Brothers</Text>
           </View>
           <Text style={styles.tabletTitle}>New Order</Text>
           <View style={styles.tablePill}>
@@ -1012,7 +1012,8 @@ const styles = StyleSheet.create({
   brand: {
     fontFamily: fonts.extrabold,
     fontSize: 18,
-    color: colors.primary,
+    // Near-black rather than navy — see the note in KitchenDisplayScreen.
+    color: colors.text,
     letterSpacing: 0.5,
   },
   searchWrap: {
