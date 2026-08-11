@@ -527,11 +527,24 @@ service cloud.firestore {
         allow create, update: if hasAnyRole(['admin', 'cashier']);
         allow delete: if hasAnyRole(['admin', 'cashier']);
       }
+      // `variants` is the priced-choices list ("Chicken ₹220 / Veg ₹180").
+      // Rules cannot iterate a list, so the per-entry price cannot be
+      // range-checked the way `price` is. That is tolerable here and nowhere
+      // else on the money path: only admin/cashier can write a menu item at
+      // all, an order line SNAPSHOTS the variant price rather than reading it
+      // back, and the bill re-derives its total from the line snapshots. So a
+      // malformed variant misprices the next order the owner's own staff
+      // place, exactly as a mistyped `price` already would — it cannot reach
+      // a bill that is already open. The size cap is what keeps a runaway
+      // write from bloating a doc every order screen reads.
       match /menuItems/{itemId} {
         allow read: if isActiveStaff();
         allow create, update: if hasAnyRole(['admin', 'cashier'])
           && request.resource.data.price is int
-          && request.resource.data.price >= 0;
+          && request.resource.data.price >= 0
+          && (!('variants' in request.resource.data)
+              || (request.resource.data.variants is list
+                  && request.resource.data.variants.size() <= 12));
         allow delete: if hasAnyRole(['admin', 'cashier']);
       }
 

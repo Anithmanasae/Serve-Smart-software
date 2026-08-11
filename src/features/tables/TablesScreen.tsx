@@ -28,6 +28,7 @@ import { gridColumns, useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import type { Kot, Order, OrderItem, Table, TableStatus } from "@/types/models";
+import { ProfileButton } from "@/components/ProfileButton";
 import { useAuth } from "@/features/auth/AuthContext";
 import { KotAlertBanner, useKotStatusAlerts } from "@/features/order/kotAlerts";
 import { TableCard } from "./TableCard";
@@ -210,6 +211,7 @@ export function TablesScreen() {
             <Text style={styles.takeawayBtnText}>🥡 Takeaway</Text>
           </Pressable>
         )}
+        <ProfileButton />
       </View>
 
       <View style={styles.filterRow}>

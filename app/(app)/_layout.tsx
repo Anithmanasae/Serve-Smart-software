@@ -6,18 +6,19 @@ import { Loading } from "@/components/Loading";
  * Authenticated area: requires a signed-in, active profile.
  *
  * This layout is a **Stack whose first screen is the tab navigator**, not the
- * tabs themselves. The five screens reached *from* a tab — a table's order,
- * bill history, staff, table setup, offers — sit beside `(tabs)` in this stack
- * rather than inside it as hidden tabs, which buys two things a tab could not:
+ * tabs themselves. The six screens reached *from* a tab — a table's order,
+ * bill history, staff, table setup, offers, and Account — sit beside `(tabs)`
+ * in this stack rather than inside it as hidden tabs, which buys two things a
+ * tab could not:
  *
  * - They **push** (`slide_from_right`) and pop back, so going deeper looks
  *   like going deeper. As hidden tabs they swapped instantly, with no cue that
  *   a back step now existed.
- * - The **tab bar goes away** while they are open. All five already draw their
- *   own "‹ Back", so the bar underneath was a second, contradictory way out of
- *   a screen the user had deliberately entered.
+ * - The **tab bar goes away** while they are open. All six draw their own
+ *   "‹ Back", so the bar underneath was a second, contradictory way out of a
+ *   screen the user had deliberately entered.
  *
- * The auth gate lives here rather than on the tabs so it covers those five as
+ * The auth gate lives here rather than on the tabs so it covers those six as
  * well; `(tabs)/_layout.tsx` can therefore assume a profile exists.
  */
 export default function AppLayout() {

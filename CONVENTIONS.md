@@ -53,10 +53,10 @@ app/                      # expo-router routes (thin — render feature screens)
   login.tsx               # RN login                    (DONE)
   (app)/_layout.tsx       # auth guard + Stack          (DONE)
   (app)/(tabs)/_layout.tsx  # bottom tab bar            (DONE)
-  (app)/(tabs)/{menu,tables,kds,bills,insights,account}.tsx
+  (app)/(tabs)/{menu,tables,kds,bills,insights}.tsx
   (app)/(tabs)/order/index.tsx        # takeaway (a tab)
   (app)/order/[tableId].tsx           # a table's order — PUSHED
-  (app)/{bill-history,staff,tables-setup,offers}.tsx  # also pushed
+  (app)/{account,bill-history,staff,tables-setup,offers}.tsx  # also pushed
 src/
   theme/theme.ts          # design tokens (colors/space/radius)
   config/tax.ts           # GST config
@@ -83,6 +83,10 @@ is the tab navigator. A module the user switches *to* is a tab, inside
 page, a form that takes over — goes beside `(tabs)`, so it pushes in from the
 right, pops back, and hides the tab bar while it is open. A pushed screen must
 draw its own way back; there is no header.
+
+**Account is not a tab.** It is pushed, reached from `<ProfileButton />` in the
+trailing corner of each tab screen's own header. Every screen a role can land
+on needs that button — it is the only route to printer setup and sign-out.
 
 ## Design specs
 

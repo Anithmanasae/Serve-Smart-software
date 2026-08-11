@@ -132,6 +132,40 @@ bill agree without talking to each other. Proven by
 `scripts/e2e/offers.e2e.ts` (13 checkpoints); run it after ANY change to
 pricing, `computeBill`, or the bill rules.
 
+## Variants / options (read before touching anything price-related)
+
+A dish can carry priced **options** — "Burger: Chicken ₹220 / Veg ₹180 /
+Crunchy ₹250". The owner adds them in Menu Management; the waiter picks one in
+the Customize sheet. Helpers live in `src/features/menu/variants.ts`.
+
+The load-bearing decisions:
+
+- **A variant is a PRICE, not a product.** It shares the parent's category,
+  photo and offer scope, which is why the offers engine needed no change at
+  all — it scopes by `menuItemId`/`categoryId`, and a variant changes neither.
+- **`MenuItem.price` is kept equal to the CHEAPEST variant.** That is what
+  every reader written before variants existed still finds: "from ₹180", the
+  reports, the offer scoping. Never let it drift to zero or to a stale value.
+- **Two or more, or it isn't a choice.** `hasVariants()` is `>= 2`. A single
+  option would open a sheet to ask a question with one answer; such an item
+  prices and adds exactly like a plain one.
+- **The line's `name` is COMPOSED at add time** — `Burger (Chicken)` — beside
+  a structured `variantId`/`variantName`. That composition is why the KOT, the
+  ESC/POS encoder, the KDS card and the bill all print the right thing with no
+  variant code in any of them. `variantId` is what the order screen matches on
+  so two variants of one dish stay two lines at two prices.
+- **The variant is snapshotted, like an offer name.** Renaming or repricing it
+  tomorrow cannot rewrite an order placed today.
+- **`variants` is written as `[]`, never `undefined`.** `stripUndefined` in
+  `menuApi` would drop the key and leave the old list on the document.
+
+`firestore.rules` can't iterate a list, so per-entry variant prices are NOT
+range-checked the way `price` is — only `is list` and a size cap. That is
+contained: only admin/cashier can write a menu item, an order line snapshots
+the price rather than reading it back, and the bill re-derives from the line
+snapshots. A malformed variant misprices the next order, exactly as a mistyped
+`price` already would; it cannot reach a bill that is already open.
+
 ## Printing (read before touching anything printer-related)
 
 Two transports, both Android-only, both absent in Expo Go. Screens import

@@ -9,6 +9,7 @@ import { Image } from "expo-image";
 import { formatMoney } from "@/lib/money";
 import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
+import { priceRange } from "./variants";
 import type { MenuItemDoc } from "./useMenuData";
 
 interface MenuItemCardProps {
@@ -24,6 +25,7 @@ function MenuItemCardImpl({
   onDelete,
   onToggleEnabled,
 }: MenuItemCardProps) {
+  const range = priceRange(item);
   return (
     <View style={[styles.card, !item.enabled && styles.cardDisabled]}>
       <Pressable
@@ -50,7 +52,22 @@ function MenuItemCardImpl({
         <Text style={styles.name} numberOfLines={1}>
           {item.name}
         </Text>
-        <Text style={styles.price}>{formatMoney(item.price)}</Text>
+        {/* The owner has to be able to see WHICH dishes ask a question at the
+            till without opening each one — a range and a count say it. */}
+        {range ? (
+          <>
+            <Text style={styles.price}>
+              {range.min === range.max
+                ? formatMoney(range.min)
+                : `${formatMoney(range.min)} – ${formatMoney(range.max)}`}
+            </Text>
+            <Text style={styles.options}>
+              {item.variants!.length} options
+            </Text>
+          </>
+        ) : (
+          <Text style={styles.price}>{formatMoney(item.price)}</Text>
+        )}
         {item.sku ? (
           <Text style={styles.sku} numberOfLines={1}>
             SKU: {item.sku}
@@ -139,6 +156,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: colors.primary,
+  },
+  options: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textMuted,
   },
   sku: {
     fontSize: 11,

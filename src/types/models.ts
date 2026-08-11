@@ -161,12 +161,47 @@ export interface MenuCategory {
   enabled: boolean;
 }
 
+/**
+ * One priced choice of a dish — "Chicken ₹220", "Veg ₹180", "Crunchy ₹250".
+ *
+ * A variant is a PRICE, not a product: it shares the parent's category, photo
+ * and offer scope, which is why offers keep working untouched (they scope by
+ * `menuItemId`/`categoryId`, and a variant changes neither).
+ *
+ * `id` is minted client-side and is stable for the life of the variant. Order
+ * lines snapshot it, so RENAMING or REPRICING a variant never reaches back
+ * into an order that already used it — the same rule the offer stamps follow.
+ */
+export interface MenuVariant {
+  id: string;
+  name: string;
+  /** Price in paise (integer) for THIS choice. Overrides MenuItem.price. */
+  price: number;
+}
+
 export interface MenuItem {
   id: string;
   name: string;
   categoryId: string;
-  /** Price in paise (integer) to avoid float rounding. ₹85.00 => 8500. */
+  /**
+   * Price in paise (integer) to avoid float rounding. ₹85.00 => 8500.
+   *
+   * With `variants` present this is the CHEAPEST variant's price, maintained
+   * on every write by the menu form. It is what "from ₹180" reads, and it is
+   * why nothing that predates variants had to change: every existing reader
+   * still finds a sane single price here instead of a zero or a stale one.
+   */
   price: number;
+  /**
+   * Priced choices for this dish. ABSENT or EMPTY = a plain item that adds
+   * straight to the order at `price`; one or more variants means the waiter
+   * must pick one, so the card opens the Customize sheet instead of adding.
+   *
+   * Never let this hold exactly one variant as a way of "labelling" a price —
+   * a single choice is not a choice, and the sheet would ask a question with
+   * one answer.
+   */
+  variants?: MenuVariant[];
   enabled: boolean;
   imageUrl?: string;
   description?: string;
@@ -291,8 +326,29 @@ export interface OrderItem {
    *  notes are distinct lines. */
   lineId: string;
   menuItemId: string;
+  /**
+   * What the line is CALLED, everywhere it is read — the cart, the kitchen
+   * ticket, the thermal print, the bill. For a variant line this is composed
+   * as `Burger (Chicken)` at the moment of adding.
+   *
+   * Composing it here rather than leaving each reader to join the two parts is
+   * deliberate: the KOT, the ESC/POS encoder, the KDS card and the bill all
+   * already print `name`, so the cook and the guest see the right thing with
+   * no code in any of those paths knowing variants exist.
+   */
   name: string;
-  /** Snapshot of price (paise) at time of adding — never trust live price. */
+  /**
+   * Which variant was chosen, when the item had any. `variantId` is the key
+   * the order screen matches on — two variants of one dish are two lines, and
+   * tapping ＋ on the card must find the right one. `variantName` is the bare
+   * choice ("Chicken"), kept apart from the composed `name` so a report can
+   * still group by it. ABSENT on a plain item, and on every line written
+   * before variants existed.
+   */
+  variantId?: string;
+  variantName?: string;
+  /** Snapshot of price (paise) at time of adding — never trust live price.
+   *  For a variant line this is the VARIANT's price, not the item's. */
   price: number;
   /** Snapshot of the item's category, so category-scoped offers can be priced
    *  from the order alone without a menu lookup. Absent on lines created

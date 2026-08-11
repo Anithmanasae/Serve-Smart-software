@@ -145,13 +145,10 @@ export default function TabsLayout() {
           tabBarIcon: glyph("receipt"),
         }}
       />
-      <Tabs.Screen
-        name="account"
-        options={{
-          title: "Account",
-          tabBarIcon: glyph("person-circle"),
-        }}
-      />
+      {/* No Account tab. It is a stack screen reached from the profile button
+          in each screen's header — see `src/components/ProfileButton.tsx`.
+          The bar is for the modules a shift moves between; settings are not
+          one, and the slot is worth more to the five that are. */}
     </Tabs>
   );
 }

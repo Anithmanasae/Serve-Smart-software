@@ -10,7 +10,13 @@ import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
 import { feel, feelToggle } from "@/lib/feedback";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
-/** Signed-in user's profile, billing settings + sign out. */
+/**
+ * Signed-in user's profile, billing settings + sign out.
+ *
+ * A **pushed** stack screen, not a tab: it is opened from the profile button
+ * in each module's header and hides the tab bar while it is up. That means it
+ * has to draw its own way back — there is no header and no bar underneath.
+ */
 export default function AccountRoute() {
   const { profile, signOut, role } = useAuth();
   const { gstEnabled, setGstEnabled } = useSettings();
@@ -39,7 +45,19 @@ export default function AccountRoute() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-      <Text style={styles.title}>Account</Text>
+      <View style={styles.header}>
+        <Pressable
+          style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
+          onPress={() => router.back()}
+          onPressIn={feel.dismiss}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
+          <Text style={styles.backBtnText}>‹ Back</Text>
+        </Pressable>
+        <Text style={styles.title}>Account</Text>
+      </View>
       <View style={styles.card}>
         <Text style={styles.avatar}>👤</Text>
         <Text style={styles.name}>{profile?.name}</Text>
@@ -216,6 +234,17 @@ const styles = StyleSheet.create({
     gap: space.s5,
     paddingBottom: space.s6 * 2,
   },
+  header: { gap: space.s4 },
+  backBtn: {
+    alignSelf: "flex-start",
+    paddingHorizontal: space.s3,
+    paddingVertical: space.s2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  backBtnText: { fontSize: 14, fontWeight: "600", color: colors.text },
   title: { fontSize: 28, fontWeight: "800", color: colors.text },
   card: {
     backgroundColor: colors.surface,

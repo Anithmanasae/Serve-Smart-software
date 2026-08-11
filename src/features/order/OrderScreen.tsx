@@ -22,13 +22,13 @@ import {
   FlatList,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Image } from "expo-image";
 import { Feather } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { formatMoney } from "@/lib/money";
@@ -38,7 +38,10 @@ import { useOffers } from "@/features/offers/useOffersData";
 import { animateNextLayout, feel } from "@/lib/feedback";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
+import { ProfileButton } from "@/components/ProfileButton";
 import { Bone, Skeleton } from "@/components/Skeleton";
+import { resolveMenuImage } from "@/features/menu/menuImages";
+import { basePrice, hasVariants } from "@/features/menu/variants";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
 import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
@@ -53,15 +56,17 @@ import {
 } from "@/lib/printer/printerService";
 import type { KotStatus, KotItemStatus, MenuItem, OrderItem } from "@/types/models";
 import {
+  addLineToLines,
   createOrderLocal,
   fetchKot,
   flushPendingWrites,
-  mergeItemIntoLines,
   sendKot,
   setLineNotesInLines,
   setLineQtyInLines,
   syncLineStatuses,
   writeOrderItems,
+  type AddLineSpec,
+  type LineVariant,
 } from "./orderApi";
 import {
   useKotsForOrder,
@@ -74,6 +79,7 @@ import {
 import { OrderMenuCard } from "./OrderMenuCard";
 import { OrderCartPanel } from "./OrderCartPanel";
 import { ALL_CATEGORIES, OrderCategoryRail } from "./OrderCategoryRail";
+import { CustomizeDishSheet, type CustomizeResult } from "./CustomizeDishSheet";
 import { KotAlertBanner, useKotStatusAlerts } from "./kotAlerts";
 
 const ALL = ALL_CATEGORIES;
@@ -94,6 +100,19 @@ function tabletPanes(width: number) {
   const cart =
     width >= 1280 ? 380 : width >= 1100 ? 344 : width >= 900 ? 312 : 288;
   return { rail, cart };
+}
+
+/**
+ * The phone's category rail width.
+ *
+ * Narrow enough that the grid still holds two cards on a 360dp phone, wide
+ * enough for a real category name before it wraps. Scaled rather than fixed so
+ * a 320dp phone gives up rail rather than card — a card that narrow stops
+ * showing its price and its ＋ Add on one line, and a wrapped category label
+ * costs nothing by comparison.
+ */
+function phoneRailWidth(width: number): number {
+  return width >= 400 ? 116 : width >= 360 ? 104 : 96;
 }
 
 /** Map a kitchen ticket status onto the matching per-line lifecycle status. */
@@ -170,6 +189,9 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [billId, setBillId] = useState<string | null>(null);
+  // The dish whose Customize sheet is open. Holding the ITEM rather than a
+  // boolean is what lets the sheet reset itself per dish (see its own effect).
+  const [customizeItem, setCustomizeItem] = useState<MenuItemDoc | null>(null);
 
   // A billed order is locked: adding/editing lines would desync the bill.
   const orderLocked = !!order?.billId;
@@ -240,13 +262,29 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
 
   const lines: OrderItem[] = order?.items?.filter((l) => !l.voided) ?? [];
 
-  // menuItemId -> the editable (pending, note-less) line, for the card stepper.
+  // menuItemId -> the editable (pending, note-less, OPTIONLESS) line, which is
+  // the one the card's − / + steps. A line carrying a variant is deliberately
+  // excluded: the card cannot know which of three burgers a ＋ meant, so those
+  // dishes route through the Customize sheet and the cart instead.
   const pendingByItem = useMemo(() => {
     const map = new Map<string, OrderItem>();
     for (const l of lines) {
-      if (l.kotStatus === "pending" && !l.voided && !l.notes) {
+      if (l.kotStatus === "pending" && !l.voided && !l.notes && !l.variantId) {
         map.set(l.menuItemId, l);
       }
+    }
+    return map;
+  }, [lines]);
+
+  // menuItemId -> un-sent units across EVERY line of it, options and remarked
+  // lines included. This is what an optioned card badges: it answers "have I
+  // already put this on the order?", which is the question the waiter is
+  // actually asking when they scan the grid.
+  const pendingQtyByItem = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const l of lines) {
+      if (l.kotStatus !== "pending" || l.voided) continue;
+      map.set(l.menuItemId, (map.get(l.menuItemId) ?? 0) + l.qty);
     }
     return map;
   }, [lines]);
@@ -336,23 +374,42 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       });
   };
 
-  const handleAdd = (item: MenuItemDoc) => {
+  /**
+   * The single add path. Every route onto the order — the card's ＋, its
+   * stepper, and the Customize sheet's "Add to Cart" — arrives here, so a
+   * variant line and a plain one are created, priced and mirrored by exactly
+   * the same code. `opts.price` is the CHOSEN option's price; without one the
+   * dish's own (cheapest) price stands.
+   */
+  const commitAdd = (
+    item: MenuItemDoc,
+    opts: {
+      variant?: LineVariant;
+      qty?: number;
+      notes?: string;
+      price?: number;
+    } = {}
+  ) => {
     // A locked order is a refusal, not a no-op: the card's tap already fired,
     // so answer it rather than leaving the press feeling swallowed. `busy` is
     // transient and stays silent.
     if (orderLocked) return feel.error();
     if (!waiterId || busy) return;
     animateNextLayout(); // a new line may enter the order sheet/cart bar
+
+    const spec: AddLineSpec = {
+      menuItemId: item.id,
+      name: item.name,
+      price: opts.price ?? basePrice(item),
+      categoryId: item.categoryId,
+      variant: opts.variant,
+      qty: opts.qty,
+      notes: opts.notes,
+    };
+
     const mirror = mirrorRef.current;
     if (mirror) {
-      const items = mergeItemIntoLines(
-        mirror.items,
-        item.id,
-        item.name,
-        item.price,
-        pricing,
-        item.categoryId
-      );
+      const items = addLineToLines(mirror.items, spec, pricing);
       mirrorRef.current = { ...mirror, items };
       track(writeOrderItems(mirror.orderId, items), "Couldn’t add item");
     } else {
@@ -361,16 +418,43 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         tableId: tableId ?? null,
         orderType,
         waiterId,
-        menuItemId: item.id,
-        name: item.name,
-        price: item.price,
-        categoryId: item.categoryId,
+        ...spec,
         offers,
       });
       mirrorRef.current = { orderId: created.orderId, items: created.items };
       if (!isDineIn) setTakeawayOrderId(created.orderId);
       track(created.commit, "Couldn’t add item");
     }
+  };
+
+  const handleAdd = (item: MenuItemDoc) => commitAdd(item);
+
+  /** "Add to Cart" in the Customize sheet: one commit carrying the option,
+   *  the quantity and the remark together. */
+  const handleCustomizeConfirm = (result: CustomizeResult) => {
+    const item = customizeItem;
+    setCustomizeItem(null);
+    if (!item) return;
+    commitAdd(item, {
+      variant: result.variant
+        ? { id: result.variant.id, name: result.variant.name }
+        : undefined,
+      qty: result.qty,
+      notes: result.notes,
+      price: result.price,
+    });
+  };
+
+  const openCustomize = (item: MenuItemDoc) => {
+    // The sheet is a read as much as a write — it is how the waiter quotes
+    // the options — so it opens even on a locked order. Nothing commits until
+    // "Add to Cart", and `commitAdd` refuses that.
+    setCustomizeItem(item);
+  };
+
+  const closeCustomize = () => {
+    feel.dismiss();
+    setCustomizeItem(null);
   };
 
   const handleQty = (lineId: string, qty: number) => {
@@ -484,11 +568,19 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       <View style={styles.gridCell}>
         <OrderMenuCard
           item={menuItem}
-          qty={pending?.qty ?? 0}
+          // An optioned card badges everything un-sent of this dish; a plain
+          // one shows the qty of the very line its stepper moves, so the
+          // number and the buttons can never disagree.
+          qty={
+            hasVariants(menuItem)
+              ? pendingQtyByItem.get(menuItem.id) ?? 0
+              : pending?.qty ?? 0
+          }
           disabled={!waiterId}
           offerName={offerNameByItem.get(menuItem.id)}
           offerEligible={eligibleItems.has(menuItem.id)}
           onAdd={() => handleAdd(menuItem)}
+          onCustomize={() => openCustomize(menuItem)}
           onDecrement={() =>
             pending && handleQty(pending.lineId, pending.qty - 1)
           }
@@ -517,6 +609,8 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     </Pressable>
   ) : null;
 
+  // Both layouts now sit it in a row of its own width, so the field carries no
+  // outer margins — its container places it.
   const searchField = (
     <View style={[styles.searchWrap, isTablet && styles.searchWrapBar]}>
       <Feather name="search" size={17} color={colors.textMuted} />
@@ -556,6 +650,16 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
             <Text style={styles.emptyText}>No items found.</Text>
           </View>
         }
+        // Counts what is ON SCREEN, not the whole menu — it is the end of the
+        // list saying "that was all of it", which is the reassurance a waiter
+        // scrolling a category actually wants.
+        ListFooterComponent={
+          filteredItems.length > 0 ? (
+            <Text style={styles.gridFooter}>
+              Total Dish : {filteredItems.length}
+            </Text>
+          ) : null
+        }
       />
     );
 
@@ -587,6 +691,34 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     feel.dismiss();
     setBillId(null);
   };
+
+  /* Customize: options, quantity and remarks, on both layouts */
+  const customizeSheet = (
+    <CustomizeDishSheet
+      item={customizeItem}
+      onCancel={closeCustomize}
+      onConfirm={handleCustomizeConfirm}
+    />
+  );
+
+  // Up to three distinct dishes on the order, for the cart bar's stack of
+  // photos. Distinct rather than per-line: three coffees are one picture, and
+  // the number beside them already says how many.
+  const cartThumbs = useMemo(() => {
+    const byId = new Map(itemsState.data.map((it) => [it.id, it]));
+    const seen = new Set<string>();
+    const out: { id: string; source: ReturnType<typeof resolveMenuImage> }[] = [];
+    for (const l of lines) {
+      if (seen.has(l.menuItemId)) continue;
+      seen.add(l.menuItemId);
+      out.push({
+        id: l.menuItemId,
+        source: resolveMenuImage(l.menuItemId, byId.get(l.menuItemId)?.imageUrl),
+      });
+      if (out.length === 3) break;
+    }
+    return out;
+  }, [lines, itemsState.data]);
 
   /* Counter billing: settle the takeaway bill without leaving the screen */
   const billModal = (
@@ -651,6 +783,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
           </View>
         </View>
 
+        {customizeSheet}
         {billModal}
 
         {/* Live kitchen status toast ("T1 — Order READY") */}
@@ -659,52 +792,51 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     );
   }
 
-  // ── Phone: chips + grid, with the order in a bottom sheet ───────────────
+  // ── Phone: rail | grid, with the order in a bottom sheet ────────────────
+  // The same three-pane idea as the tablet, minus the pane there is no room
+  // for: the categories stay beside the grid, and the cart collapses to a bar
+  // that opens the sheet.
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
-      {/* App header */}
+      {/* One compact bar: the way back, WHERE this order is going, the search
+          and the way to Account. The brand lockup and the "New Order" title
+          that used to sit above it were two full rows saying what the tab bar
+          and the table pill already say — the rail needs that height more. */}
       <View style={styles.appBar}>
-        <View style={styles.brandRow}>
-          {backButton}
-          <BrandMark size={20} />
-          <Text style={styles.brand}>Smart Serve</Text>
-        </View>
-        <Text style={styles.bell}>🔔</Text>
+        {backButton}
+        <Text style={styles.phoneTitle} numberOfLines={1}>
+          {tableLabel}
+        </Text>
+        <View style={styles.appBarSpacer} />
+        <ProfileButton />
       </View>
 
-      {/* Title */}
-      <View style={styles.titleBlock}>
-        <Text style={styles.title}>New Order</Text>
-      </View>
+      {/* Its own row, full width. Squeezing it into the bar beside the title
+          and Account leaves ~150dp on a 360dp phone — a search field too
+          narrow to show what you typed is worse than one extra row. */}
+      <View style={styles.searchRow}>{searchField}</View>
 
-      {/* Search */}
-      {searchField}
-
-      {/* Category chips */}
-      <View style={styles.chipsWrap}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipsRow}
-        >
-          <Chip
-            label="All Items"
-            active={activeCategory === ALL}
-            onPress={() => setActiveCategory(ALL)}
+      <View style={styles.phoneBody}>
+        <View style={[styles.railPane, { width: phoneRailWidth(width) }]}>
+          <OrderCategoryRail
+            categories={enabledCategories}
+            countByCategory={countByCategory}
+            totalCount={enabledItemCount}
+            activeId={activeCategory}
+            compact
+            onSelect={(id) => {
+              // Moving through choices, not pressing a button — and a re-tap
+              // of the current category says nothing, same as a chip did.
+              if (id !== activeCategory) feel.select();
+              setActiveCategory(id);
+            }}
           />
-          {enabledCategories.map((c) => (
-            <Chip
-              key={c.id}
-              label={c.name}
-              active={activeCategory === c.id}
-              onPress={() => setActiveCategory(c.id)}
-            />
-          ))}
-        </ScrollView>
-      </View>
+        </View>
 
-      {/* Menu grid */}
-      {menuGrid(insets.bottom + (lines.length > 0 ? 96 : space.s6))}
+        <View style={styles.centerPane}>
+          {menuGrid(insets.bottom + (lines.length > 0 ? 104 : space.s6))}
+        </View>
+      </View>
 
       {/* Collapsed cart bar */}
       {lines.length > 0 && !sheetOpen ? (
@@ -718,15 +850,48 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
             feel.press(); // something is opening
             setSheetOpen(true);
           }}
+          accessibilityRole="button"
+          accessibilityLabel={`View order, ${itemCount} items, ${formatMoney(
+            payable
+          )}`}
         >
-          <Text style={styles.cartBarText}>
-            🛍 View Order · {itemCount} Item{itemCount === 1 ? "" : "s"}
-          </Text>
+          {/* Overlapped photos of what is on the order. The count rides on
+              the stack rather than in prose: at a table the waiter is
+              checking a number, not reading a sentence. */}
+          <View style={styles.cartThumbs}>
+            {cartThumbs.map((t, i) => (
+              <View
+                key={t.id}
+                style={[styles.cartThumbWrap, i > 0 && styles.cartThumbOverlap]}
+              >
+                {t.source ? (
+                  <Image
+                    style={styles.cartThumb}
+                    source={t.source}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                    recyclingKey={t.id}
+                  />
+                ) : (
+                  <View style={[styles.cartThumb, styles.cartThumbEmpty]} />
+                )}
+              </View>
+            ))}
+            <View style={styles.cartCount}>
+              <Text style={styles.cartCountText}>{itemCount}</Text>
+            </View>
+          </View>
+
           <View style={styles.cartBarPrice}>
             {offerDiscount > 0 ? (
               <Text style={styles.cartBarStruck}>{formatMoney(subtotal)}</Text>
             ) : null}
             <Text style={styles.cartBarText}>{formatMoney(payable)}</Text>
+            <Feather
+              name="chevron-right"
+              size={20}
+              color={colors.textInverse}
+            />
           </View>
         </Pressable>
       ) : null}
@@ -758,6 +923,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         </View>
       </Modal>
 
+      {customizeSheet}
       {billModal}
 
       {/* Live kitchen status toast ("T1 — Order READY") */}
@@ -792,6 +958,10 @@ function MenuGridSkeleton({ columns }: { columns: number }) {
                 <View style={styles.skeletonBody}>
                   <Bone width="80%" height={13} />
                   <Bone width="45%" height={13} />
+                  {/* The ＋ Add block. Without it the grey card is 44dp
+                      shorter than the real one and every row jumps on
+                      arrival — the exact thing a skeleton exists to avoid. */}
+                  <Bone width="100%" height={44} round={radius.md} />
                 </View>
               </View>
             </View>
@@ -799,37 +969,6 @@ function MenuGridSkeleton({ columns }: { columns: number }) {
         </View>
       ))}
     </Skeleton>
-  );
-}
-
-function Chip({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      style={({ pressed }) => [
-        styles.chip,
-        active && styles.chipActive,
-        pressed && styles.pressed,
-      ]}
-      onPress={() => {
-        // A filter tick, not a button press: the same feel the tablet rail
-        // uses, so scanning categories feels identical on both layouts.
-        // Re-tapping the active chip changes nothing, so it says nothing.
-        if (!active) feel.select();
-        onPress();
-      }}
-    >
-      <Text style={[styles.chipText, active && styles.chipTextActive]}>
-        {label}
-      </Text>
-    </Pressable>
   );
 }
 
@@ -844,9 +983,27 @@ const styles = StyleSheet.create({
   appBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: space.s2,
     paddingHorizontal: space.s4,
-    paddingVertical: space.s3,
+    paddingVertical: space.s2,
+  },
+  appBarSpacer: {
+    flex: 1,
+  },
+  phoneTitle: {
+    flexShrink: 1,
+    fontFamily: fonts.extrabold,
+    fontSize: 22,
+    color: colors.text,
+    letterSpacing: -0.3,
+  },
+  searchRow: {
+    paddingHorizontal: space.s4,
+    paddingBottom: space.s2,
+  },
+  phoneBody: {
+    flex: 1,
+    flexDirection: "row",
   },
   brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
   // Pulled back by its own padding so the chevron optically lines up with the
@@ -858,31 +1015,10 @@ const styles = StyleSheet.create({
     color: colors.primary,
     letterSpacing: 0.5,
   },
-  bell: {
-    fontSize: 18,
-  },
-  titleBlock: {
-    paddingHorizontal: space.s4,
-    paddingBottom: space.s3,
-    gap: space.s1,
-  },
-  title: {
-    fontFamily: fonts.extrabold,
-    fontSize: 28,
-    color: colors.text,
-    letterSpacing: -0.4,
-  },
-  subtitle: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    color: colors.textMuted,
-  },
   searchWrap: {
     flexDirection: "row",
     alignItems: "center",
     gap: space.s2,
-    marginHorizontal: space.s4,
-    marginBottom: space.s2,
     paddingHorizontal: space.s4,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -890,13 +1026,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     ...shadow.card,
   },
-  // On a tablet the field lives inside the top bar rather than on its own
-  // row: no outer margins, and it takes the slack left by the brand + title.
+  // On a tablet the field lives inside the top bar, taking the slack left by
+  // the brand + title rather than a whole row of its own.
   searchWrapBar: {
     flex: 1,
     maxWidth: 460,
-    marginHorizontal: 0,
-    marginBottom: 0,
   },
   searchInput: {
     flex: 1,
@@ -944,36 +1078,16 @@ const styles = StyleSheet.create({
   cartPane: {
     paddingLeft: space.s3,
   },
-  chipsWrap: {
-    paddingBottom: space.s2,
+  gridContent: {
+    paddingHorizontal: space.s3,
+    paddingTop: space.s2,
   },
-  chipsRow: {
-    paddingHorizontal: space.s4,
-    gap: space.s2,
-  },
-  chip: {
-    paddingHorizontal: space.s4,
-    paddingVertical: space.s2,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  chipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  chipText: {
+  gridFooter: {
+    textAlign: "center",
+    paddingVertical: space.s5,
     fontFamily: fonts.semibold,
     fontSize: 13,
-    color: colors.text,
-  },
-  chipTextActive: {
-    color: colors.textInverse,
-  },
-  gridContent: {
-    paddingHorizontal: space.s4,
-    paddingTop: space.s2,
+    color: colors.textMuted,
   },
   gridRow: {
     gap: space.s3,
@@ -989,7 +1103,7 @@ const styles = StyleSheet.create({
   skeletonWrap: {
     flex: 1,
     overflow: "hidden",
-    paddingHorizontal: space.s4,
+    paddingHorizontal: space.s3,
     paddingTop: space.s2,
   },
   skeletonCard: {
@@ -997,6 +1111,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.xl,
     overflow: "hidden",
+    // Matches the real card's resting (transparent) border, so the swap does
+    // not move the grid by three pixels.
+    borderWidth: 1.5,
+    borderColor: "transparent",
     ...shadow.float,
   },
   skeletonPhoto: {
@@ -1056,6 +1174,47 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: space.s2,
+  },
+  cartThumbs: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  // A white ring around each photo is what separates one from the next once
+  // they overlap — without it three dark dishes read as a single smudge.
+  cartThumbWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.pill,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    backgroundColor: colors.primary,
+    overflow: "hidden",
+  },
+  cartThumbOverlap: {
+    marginLeft: -12,
+  },
+  cartThumb: {
+    width: "100%",
+    height: "100%",
+    borderRadius: radius.pill,
+  },
+  cartThumbEmpty: {
+    backgroundColor: colors.primaryDark,
+  },
+  cartCount: {
+    minWidth: 26,
+    height: 26,
+    paddingHorizontal: 6,
+    marginLeft: space.s2,
+    borderRadius: radius.pill,
+    backgroundColor: colors.textInverse,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cartCountText: {
+    fontFamily: fonts.extrabold,
+    fontSize: 13,
+    color: colors.primary,
   },
   cartBarStruck: {
     color: colors.textInverse,

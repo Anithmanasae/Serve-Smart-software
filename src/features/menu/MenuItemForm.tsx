@@ -21,11 +21,12 @@ import {
 import { Image } from "expo-image";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
+import { randomUUID } from "expo-crypto";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { rupeesToPaise } from "@/lib/money";
+import { formatMoney, rupeesToPaise } from "@/lib/money";
 import { feel, feelToggle } from "@/lib/feedback";
 import { colors, radius, space } from "@/theme/theme";
-import type { MenuCategory, MenuItem } from "@/types/models";
+import type { MenuCategory, MenuItem, MenuVariant } from "@/types/models";
 import {
   createMenuItem,
   setMenuItemImage,
@@ -49,6 +50,40 @@ interface MenuItemFormProps {
 function paiseToRupeeString(paise: number): string {
   const rupees = paise / 100;
   return Number.isInteger(rupees) ? String(rupees) : rupees.toFixed(2);
+}
+
+/**
+ * A variant row mid-edit. Prices live as the RUPEE STRING the owner is typing,
+ * not as paise, so a half-typed "18" is not repeatedly parsed into ₹18 and
+ * re-rendered under the cursor. They become paise once, on save.
+ */
+interface VariantDraft {
+  id: string;
+  name: string;
+  priceRupees: string;
+}
+
+function isCompleteVariant(v: VariantDraft): boolean {
+  const price = Number(v.priceRupees);
+  return (
+    v.name.trim().length > 0 &&
+    v.priceRupees.trim() !== "" &&
+    Number.isFinite(price) &&
+    price > 0
+  );
+}
+
+/** Drafts -> the stored shape, cheapest first so the menu reads in the order
+ *  the guest is offered a price. */
+function toVariants(drafts: VariantDraft[]): MenuVariant[] {
+  return drafts
+    .filter(isCompleteVariant)
+    .map((v) => ({
+      id: v.id,
+      name: v.name.trim(),
+      price: rupeesToPaise(Number(v.priceRupees)),
+    }))
+    .sort((a, b) => a.price - b.price);
 }
 
 /**
@@ -128,6 +163,7 @@ export function MenuItemForm({
   const [name, setName] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [priceRupees, setPriceRupees] = useState("");
+  const [variants, setVariants] = useState<VariantDraft[]>([]);
   const [description, setDescription] = useState("");
   const [sku, setSku] = useState("");
   const [enabled, setEnabled] = useState(true);
@@ -149,15 +185,30 @@ export function MenuItemForm({
   // instead of creating a duplicate.
   const createdIdRef = useRef<string | null>(null);
 
-  // The primary button unlocks only once the required fields are filled:
-  // a name, a category, and a price greater than zero.
+  // Options priced and named well enough to store. Two or more is what makes
+  // the item a "choose one" dish (see `hasVariants`); a single finished row is
+  // kept and saved, but prices and adds exactly like a plain item.
+  const savedVariants = toVariants(variants);
+  const priced = savedVariants.length > 0;
+
+  // With options, the item's own price is DERIVED as the cheapest of them —
+  // the invariant `MenuItem.price` documents. That is what keeps every reader
+  // written before variants existed ("from ₹180", the offer scoping, the
+  // reports) finding a sane number instead of a stale one.
   const priceNum = Number(priceRupees);
+  const derivedPrice = priced ? savedVariants[0].price : null;
+
+  // A half-finished option row is the one thing that must block the save: it
+  // would be silently dropped, and the owner would leave believing they had
+  // added a choice the waiters can't see.
+  const incompleteVariants = variants.some((v) => !isCompleteVariant(v));
+
   const canSave =
     name.trim().length > 0 &&
     categoryId !== "" &&
-    priceRupees.trim() !== "" &&
-    Number.isFinite(priceNum) &&
-    priceNum > 0;
+    !incompleteVariants &&
+    (priced ||
+      (priceRupees.trim() !== "" && Number.isFinite(priceNum) && priceNum > 0));
 
   // Reset the form whenever it opens for a different item.
   useEffect(() => {
@@ -166,6 +217,13 @@ export function MenuItemForm({
     setName(item?.name ?? "");
     setCategoryId(item?.categoryId ?? defaultCategoryId ?? "");
     setPriceRupees(item ? paiseToRupeeString(item.price) : "");
+    setVariants(
+      (item?.variants ?? []).map((v) => ({
+        id: v.id,
+        name: v.name,
+        priceRupees: paiseToRupeeString(v.price),
+      }))
+    );
     setDescription(item?.description ?? "");
     setSku(item?.sku ?? "");
     setEnabled(item?.enabled ?? true);
@@ -218,7 +276,12 @@ export function MenuItemForm({
       const base: MenuItemInput = {
         name: name.trim(),
         categoryId,
-        price: rupeesToPaise(priceNum),
+        price: derivedPrice ?? rupeesToPaise(priceNum),
+        // `[]` rather than `undefined` when the last option is removed:
+        // stripUndefined would drop the key and leave the old list on the
+        // document, so the dish would keep asking for a choice nobody can see
+        // in the form any more.
+        variants: savedVariants,
         enabled,
         description: description.trim() || undefined,
         sku: sku.trim() || undefined,
@@ -368,15 +431,106 @@ export function MenuItemForm({
               ) : null}
             </View>
 
-            <Text style={styles.label}>Price (₹)</Text>
-            <TextInput
-              style={styles.input}
-              value={priceRupees}
-              onChangeText={setPriceRupees}
-              placeholder="0"
-              placeholderTextColor={colors.textMuted}
-              keyboardType="decimal-pad"
-            />
+            {/* With options the price is theirs, not the item's — so the
+                field is REPLACED rather than left on screen doing nothing. */}
+            {priced ? (
+              <>
+                <Text style={styles.label}>Price (₹)</Text>
+                <View style={styles.derivedPrice}>
+                  <Text style={styles.derivedPriceText}>
+                    from {formatMoney(derivedPrice!)}
+                  </Text>
+                  <Text style={styles.help}>
+                    Taken from the cheapest option below.
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.label}>Price (₹)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={priceRupees}
+                  onChangeText={setPriceRupees}
+                  placeholder="0"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                />
+              </>
+            )}
+
+            <Text style={styles.label}>Options</Text>
+            <Text style={styles.help}>
+              Priced choices of the same dish — Chicken ₹220, Veg ₹180. Add two
+              or more and the waiter picks one when adding it to an order.
+            </Text>
+            {variants.map((v, i) => (
+              <View key={v.id} style={styles.variantRow}>
+                <TextInput
+                  style={[styles.input, styles.variantName]}
+                  value={v.name}
+                  onChangeText={(text) =>
+                    setVariants((prev) =>
+                      prev.map((row, j) =>
+                        j === i ? { ...row, name: text } : row
+                      )
+                    )
+                  }
+                  placeholder={i === 0 ? "Chicken" : "Option name"}
+                  placeholderTextColor={colors.textMuted}
+                />
+                <TextInput
+                  style={[styles.input, styles.variantPrice]}
+                  value={v.priceRupees}
+                  onChangeText={(text) =>
+                    setVariants((prev) =>
+                      prev.map((row, j) =>
+                        j === i ? { ...row, priceRupees: text } : row
+                      )
+                    )
+                  }
+                  placeholder="₹"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                />
+                <Pressable
+                  hitSlop={8}
+                  style={({ pressed }) => [
+                    styles.variantRemove,
+                    pressed && styles.pressed,
+                  ]}
+                  onPress={() => {
+                    feel.dismiss();
+                    setVariants((prev) => prev.filter((_, j) => j !== i));
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove option ${v.name || i + 1}`}
+                >
+                  <Text style={styles.variantRemoveGlyph}>✕</Text>
+                </Pressable>
+              </View>
+            ))}
+            <Pressable
+              style={({ pressed }) => [
+                styles.addVariant,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => {
+                feel.tap();
+                setVariants((prev) => [
+                  ...prev,
+                  { id: randomUUID(), name: "", priceRupees: "" },
+                ]);
+              }}
+            >
+              <Text style={styles.addVariantText}>＋ Add option</Text>
+            </Pressable>
+            {variants.length === 1 ? (
+              <Text style={styles.help}>
+                One option on its own isn’t a choice — this dish will still add
+                straight to the order. Add another to make the waiter pick.
+              </Text>
+            ) : null}
 
             <Text style={styles.label}>Description</Text>
             <TextInput
@@ -444,7 +598,9 @@ export function MenuItemForm({
                     ? item
                       ? "Save Changes"
                       : "Add Item"
-                    : "Enter name, category & price"}
+                    : incompleteVariants
+                      ? "Name and price every option"
+                      : "Enter name, category & price"}
                 </Text>
               )}
             </Pressable>
@@ -576,6 +732,51 @@ const styles = StyleSheet.create({
   help: {
     fontSize: 13,
     color: colors.textMuted,
+  },
+  derivedPrice: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radius.sm,
+    paddingHorizontal: space.s3,
+    paddingVertical: space.s3,
+    gap: space.s1,
+  },
+  derivedPriceText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  variantRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s2,
+  },
+  variantName: {
+    flex: 1,
+  },
+  // Wide enough for "1250" without the digits sliding under the cursor, and
+  // fixed so the name field is the one that absorbs a narrow screen.
+  variantPrice: {
+    width: 88,
+    textAlign: "right",
+  },
+  variantRemove: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  variantRemoveGlyph: {
+    fontSize: 15,
+    color: colors.textMuted,
+  },
+  addVariant: {
+    alignSelf: "flex-start",
+    paddingVertical: space.s2,
+  },
+  addVariantText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.primary,
   },
   enabledRow: {
     flexDirection: "row",

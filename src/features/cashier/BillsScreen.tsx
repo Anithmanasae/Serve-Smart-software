@@ -26,6 +26,7 @@ import { formatMoney } from "@/lib/money";
 import { useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { Bone, Skeleton } from "@/components/Skeleton";
+import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import type { Bill, Order, Table } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -151,6 +152,7 @@ export function BillsScreen() {
             {roleLabel ? ` · ${roleLabel}` : ""}
           </Text>
         </View>
+        <ProfileButton />
       </View>
 
       {/* Two snapshots have to land before there is a ledger to show, so the

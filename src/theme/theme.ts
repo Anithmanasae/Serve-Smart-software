@@ -24,6 +24,21 @@ export const colors = {
   border: "#e5e7eb",
   borderStrong: "#d1d5db",
 
+  // The track a segmented control's active tab sits in. Deliberately darker
+  // than `surfaceMuted`: the active tab IS `surface` (white), so the track has
+  // to be the thing that separates them — on a white card at arm's length,
+  // #f0f1f3 behind #ffffff is not a visible difference.
+  track: "#e4e6ea",
+
+  // TREND direction. Green up / red down, and never `primary` for either:
+  // navy means "this control is active" everywhere else in the app, so a navy
+  // pill on a KPI reads as a selected filter rather than as a number going up.
+  // Soft tint + darker text, the same pairing as every other pill here.
+  trendUp: "#0f7a4f",
+  trendUpSoft: "#e3f6ec",
+  trendDown: "#e5484d", // = danger
+  trendDownSoft: "#fdecec",
+
   // Skeleton bones. Deliberately a touch darker than `border` and cooler than
   // `surfaceMuted`: a placeholder has to read on the white card AND on the
   // gray canvas, and every loading screen puts both behind it.
@@ -94,6 +109,17 @@ export const shadow = {
     shadowOpacity: 0.06,
     shadowRadius: 3,
     elevation: 2,
+  },
+  // A small control lifted off the surface it sits in — the active half of a
+  // segmented control. Tighter and a touch stronger than `card`: the shadow
+  // has a few pixels of track to fall on, so a 20px blur would just wash the
+  // whole control instead of edging one tab.
+  raised: {
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    elevation: 3,
   },
   // Soft, highly-blurred depth for floating white cards on the floor grid.
   float: {

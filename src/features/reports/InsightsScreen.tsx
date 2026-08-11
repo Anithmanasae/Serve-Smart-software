@@ -19,8 +19,10 @@ import {
   Text,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Bone, Skeleton } from "@/components/Skeleton";
+import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { formatMoney } from "@/lib/money";
 import { formatDayKeyFull, formatDayKeyShort } from "@/lib/date";
@@ -91,6 +93,11 @@ function prettyDay(dayKey: string): string {
   if (!y || !m || !d) return dayKey;
   const dow = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
   return `${WEEKDAYS[dow]} ${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}`;
+}
+
+/** The count line under a KPI's money total — "1 Bill" / "3 Bills". */
+function billsCaption(count: number): string {
+  return `${count} ${count === 1 ? "Bill" : "Bills"}`;
 }
 
 /** "12 Jul – 06 Aug 2026", dropping the repeated year when both ends share it. */
@@ -221,10 +228,13 @@ export function InsightsScreen() {
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Insights</Text>
-        <Text style={styles.subtitle}>
-          Analyze your restaurant's performance.
-        </Text>
+        <View style={styles.headerText}>
+          <Text style={styles.title}>Insights</Text>
+          <Text style={styles.subtitle}>
+            Analyze your restaurant's performance.
+          </Text>
+        </View>
+        <ProfileButton />
       </View>
 
       {/* Analytics | Reports segmented control */}
@@ -259,10 +269,25 @@ export function InsightsScreen() {
           horizontally so the custom chip can carry the full range as its
           label without squeezing the presets. */}
       <View style={styles.rangeRow}>
-        <Text style={styles.rangeIcon}>🗓️</Text>
+        {/* A vector glyph, not the 🗓️ codepoint: an emoji renders in the
+            platform's own colour and weight, which is the one thing in this
+            row that could not be made to match the outline icons in the tab
+            bar below. Decorative — the chips already say what this is. */}
+        <Ionicons
+          name="calendar-outline"
+          size={18}
+          color={colors.textMuted}
+          style={styles.rangeIcon}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        />
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
+          // `flexShrink` (not `flex: 1`) lets the row stay chip-width on a
+          // tablet and become scrollable on a narrow phone, and the icon keeps
+          // its space either way instead of being pushed off the left edge.
+          style={styles.rangeScroll}
           contentContainerStyle={styles.rangeChips}
         >
           {RANGE_OPTIONS.map((o) => {
@@ -370,27 +395,28 @@ export function InsightsScreen() {
                 </View>
                 {/* Revenue above is already NET of these — the cancelled sale
                     was reversed out of it. This tile is what stops a refund
-                    from looking like a sale that simply never happened. */}
+                    from looking like a sale that simply never happened.
+                    Money leads and the count qualifies it: "3 · ₹7,200.00" on
+                    one line made the reader work out which number was the
+                    headline, and put a count where every other tile has a
+                    total. */}
                 <View style={[styles.kpiCell, { width: kpiWidth }]}>
                   <KpiCard
                     label="Cancelled Bills"
-                    value={
-                      totals.voidedBillCount === 0
-                        ? "0"
-                        : `${totals.voidedBillCount} · ${formatMoney(
-                            totals.voidedRevenue
-                          )}`
-                    }
+                    value={formatMoney(totals.voidedRevenue)}
+                    subtitle={billsCaption(totals.voidedBillCount)}
                     delta={deltas.voided}
                   />
                 </View>
                 {/* Non-chargeable sits alongside the headline numbers, not
                     buried in a sub-report: a comp is money the restaurant
                     chose not to take, and it should be as visible as the
-                    money it did. */}
+                    money it did. "NC Value" / "NC Bills" rather than
+                    "Non-Chargeable" / "NC Bills" — one term for the feature,
+                    so the pair reads as two views of one thing. */}
                 <View style={[styles.kpiCell, { width: kpiWidth }]}>
                   <KpiCard
-                    label="Non-Chargeable"
+                    label="NC Value"
                     value={formatMoney(totals.ncAmount)}
                     delta={deltas.nc}
                   />
@@ -398,7 +424,8 @@ export function InsightsScreen() {
                 <View style={[styles.kpiCell, { width: kpiWidth }]}>
                   <KpiCard
                     label="NC Bills"
-                    value={String(totals.ncCount)}
+                    value={formatMoney(totals.ncAmount)}
+                    subtitle={billsCaption(totals.ncCount)}
                     delta={deltas.ncCount}
                   />
                 </View>
@@ -480,8 +507,10 @@ export function InsightsScreen() {
                     label="Cancelled"
                     value={formatMoney(totals.voidedRevenue)}
                   />
+                  {/* Same term as the Analytics tile — one name for one
+                      number, whichever tab you read it on. */}
                   <SummaryStat
-                    label="Comped"
+                    label="NC Value"
                     value={formatMoney(totals.ncAmount)}
                   />
                   <SummaryStat
@@ -733,9 +762,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   header: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: space.s3,
     paddingHorizontal: space.s4,
     paddingTop: space.s3,
-    paddingBottom: space.s2,
+    // The title block and the controls under it were one crowded run of text.
+    // The gap is what says the heading names the page rather than labelling
+    // the segmented control immediately below it.
+    paddingBottom: space.s4,
+  },
+  headerText: {
+    flex: 1,
   },
   title: {
     fontSize: 24,
@@ -745,16 +783,20 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 13,
     color: colors.textMuted,
-    marginTop: 2,
+    marginTop: space.s1,
   },
   pressed: {
     opacity: 0.7,
   },
+  // The active tab is white, so the TRACK is what has to carry the contrast —
+  // `surfaceMuted` behind `surface` is a difference you can only see indoors.
+  // A darker track plus a lift on the active tab means the selected half reads
+  // as raised rather than as "the half that isn't grey".
   segment: {
     flexDirection: "row",
     marginHorizontal: space.s4,
     padding: space.s1,
-    backgroundColor: colors.surfaceMuted,
+    backgroundColor: colors.track,
     borderRadius: radius.md,
   },
   segmentBtn: {
@@ -765,7 +807,7 @@ const styles = StyleSheet.create({
   },
   segmentBtnActive: {
     backgroundColor: colors.surface,
-    ...shadow.card,
+    ...shadow.raised,
   },
   segmentText: {
     fontSize: 14,
@@ -783,12 +825,19 @@ const styles = StyleSheet.create({
     paddingVertical: space.s3,
   },
   rangeIcon: {
-    fontSize: 16,
+    // The glyph box is square; nudge it onto the chips' optical centre.
+    marginTop: 1,
+  },
+  rangeScroll: {
+    flexShrink: 1,
   },
   rangeChips: {
     flexDirection: "row",
     alignItems: "center",
     gap: space.s2,
+    // The chips are the scrollable content, so their own trailing padding is
+    // the right margin — a margin on the ScrollView would clip the last chip
+    // mid-scroll instead of letting it come fully into view.
     paddingRight: space.s4,
   },
   rangeChip: {

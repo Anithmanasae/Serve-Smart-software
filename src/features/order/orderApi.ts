@@ -23,6 +23,7 @@ import { db } from "@/lib/firebase";
 import { paths } from "@/lib/firestore/paths";
 import { computeBill } from "@/lib/money";
 import { applyOffers, totalOfferDiscount } from "@/lib/offers";
+import { composeLineName } from "@/features/menu/variants";
 import type {
   Kot,
   KotItem,
@@ -88,6 +89,28 @@ function totalsOf(items: OrderItem[]): {
   };
 }
 
+/** The chosen priced option, when the dish had any. Snapshotted onto the line
+ *  so renaming or repricing it later never rewrites an order. */
+export interface LineVariant {
+  id: string;
+  name: string;
+}
+
+/** Everything one add needs. `price` is what will actually be CHARGED per
+ *  unit — the variant's price when `variant` is set, the item's otherwise;
+ *  the caller resolves that, because only it knows which option was tapped. */
+export interface AddLineSpec {
+  menuItemId: string;
+  /** The dish's own name. The variant is appended by `composeLineName`. */
+  name: string;
+  price: number;
+  categoryId?: string;
+  variant?: LineVariant;
+  /** Defaults to 1. The Customize sheet commits its whole stepper at once. */
+  qty?: number;
+  notes?: string;
+}
+
 /** Build a fresh `pending` order line for a menu item (price snapshotted).
  *  `categoryId` is snapshotted alongside the price so category-scoped offers
  *  can be applied from the order alone, with no menu lookup. */
@@ -95,16 +118,23 @@ export function newOrderLine(
   menuItemId: string,
   name: string,
   price: number,
-  categoryId?: string
+  categoryId?: string,
+  variant?: LineVariant,
+  qty = 1,
+  notes = ""
 ): OrderItem {
   return {
     lineId: randomUUID(),
     menuItemId,
-    name,
+    // Composed once, here. Every downstream reader — the KOT, the ESC/POS
+    // ticket, the KDS card, the bill — prints `name` and so shows the chosen
+    // option without knowing variants exist.
+    name: composeLineName(name, variant?.name),
     price,
     ...(categoryId ? { categoryId } : {}),
-    qty: 1,
-    notes: "",
+    ...(variant ? { variantId: variant.id, variantName: variant.name } : {}),
+    qty,
+    notes,
     kotStatus: "pending",
     kotId: null,
     voided: false,
@@ -130,30 +160,83 @@ export function newOrderLine(
 // money-critical mutations (send KOT, billing) stay transactional.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Pure: merge one unit of a menu item into a line-set, then re-price against
- *  `offers`. Increments qty on an existing pending, note-less, un-voided line
- *  for the item, else appends a fresh line — same semantics as
- *  addOrCreateOrder's append path. */
+/**
+ * The pending, note-less, un-voided line a further tap of ＋ should land on —
+ * or -1 for none.
+ *
+ * The VARIANT is part of the identity: a Chicken Burger and a Veg Burger are
+ * two lines at two prices, and merging them would charge one price for both.
+ * A line predating variants has no `variantId`, which correctly matches a
+ * plain add and correctly misses a variant one.
+ */
+export function findMergeableLine(
+  items: OrderItem[],
+  menuItemId: string,
+  variantId?: string
+): number {
+  return items.findIndex(
+    (l) =>
+      l.menuItemId === menuItemId &&
+      (l.variantId ?? undefined) === variantId &&
+      l.kotStatus === "pending" &&
+      !l.voided &&
+      !l.notes
+  );
+}
+
+/**
+ * Pure: add `qty` units of a dish to a line-set, then re-price against
+ * `offers`.
+ *
+ * Merges onto a matching pending line where one exists, else appends. A spec
+ * carrying `notes` ALWAYS appends: "no onions" is a different instruction to
+ * the kitchen, so folding it into an existing line would silently change what
+ * gets cooked for someone who did not ask for it.
+ */
+export function addLineToLines(
+  items: OrderItem[],
+  spec: AddLineSpec,
+  ctx: PricingContext
+): OrderItem[] {
+  const qty = spec.qty ?? 1;
+  const notes = spec.notes?.trim() ?? "";
+  const idx = notes
+    ? -1
+    : findMergeableLine(items, spec.menuItemId, spec.variant?.id);
+  const next =
+    idx >= 0
+      ? items.map((l, i) => (i === idx ? { ...l, qty: l.qty + qty } : l))
+      : [
+          ...items,
+          newOrderLine(
+            spec.menuItemId,
+            spec.name,
+            spec.price,
+            spec.categoryId,
+            spec.variant,
+            qty,
+            notes
+          ),
+        ];
+  return repriceLines(next, ctx);
+}
+
+/** Pure: merge ONE unit of a menu item into a line-set, then re-price against
+ *  `offers`. The plain ＋ path — `addLineToLines` with a qty of one. */
 export function mergeItemIntoLines(
   items: OrderItem[],
   menuItemId: string,
   name: string,
   price: number,
   ctx: PricingContext,
-  categoryId?: string
+  categoryId?: string,
+  variant?: LineVariant
 ): OrderItem[] {
-  const idx = items.findIndex(
-    (l) =>
-      l.menuItemId === menuItemId &&
-      l.kotStatus === "pending" &&
-      !l.voided &&
-      !l.notes
+  return addLineToLines(
+    items,
+    { menuItemId, name, price, categoryId, variant },
+    ctx
   );
-  const next =
-    idx >= 0
-      ? items.map((l, i) => (i === idx ? { ...l, qty: l.qty + 1 } : l))
-      : [...items, newOrderLine(menuItemId, name, price, categoryId)];
-  return repriceLines(next, ctx);
 }
 
 /** Pure: set a pending line's qty; `qty <= 0` removes the line. Re-priced,
@@ -208,6 +291,9 @@ export function createOrderLocal(params: {
   name: string;
   price: number;
   categoryId?: string;
+  variant?: LineVariant;
+  qty?: number;
+  notes?: string;
   offers?: Offer[];
 }): { orderId: string; items: OrderItem[]; commit: Promise<void> } {
   const {
@@ -218,6 +304,9 @@ export function createOrderLocal(params: {
     name,
     price,
     categoryId,
+    variant,
+    qty,
+    notes,
     offers = [],
   } = params;
   const newOrderRef = doc(paths.orders());
@@ -226,7 +315,17 @@ export function createOrderLocal(params: {
   // tap. This moment is also the one every later edit is re-priced against —
   // see PricingContext.at.
   const items = repriceLines(
-    [newOrderLine(menuItemId, name, price, categoryId)],
+    [
+      newOrderLine(
+        menuItemId,
+        name,
+        price,
+        categoryId,
+        variant,
+        qty ?? 1,
+        notes?.trim() ?? ""
+      ),
+    ],
     { offers, at: new Date() }
   );
 

@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { feel, feelToggle } from "@/lib/feedback";
 import { gridColumns, useResponsive } from "@/lib/responsive";
 import { Bone, Skeleton } from "@/components/Skeleton";
+import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { deleteMenuItem, setMenuItemEnabled } from "./menuApi";
 import { useMenuCategories, useMenuItems } from "./useMenuData";
@@ -174,6 +175,7 @@ export function MenuManagementScreen() {
         >
           <Text style={styles.manageBtnText}>Categories</Text>
         </Pressable>
+        <ProfileButton />
       </View>
 
       {/* Search */}
@@ -370,6 +372,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
+    gap: space.s2,
     paddingHorizontal: space.s4,
     paddingTop: space.s3,
     paddingBottom: space.s2,

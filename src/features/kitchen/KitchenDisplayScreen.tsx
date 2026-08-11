@@ -31,6 +31,7 @@ import { useResponsive } from "@/lib/responsive";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import { BrandMark } from "@/components/BrandLogo";
 import { Bone, Skeleton } from "@/components/Skeleton";
+import { ProfileButton } from "@/components/ProfileButton";
 import type { Kot } from "@/types/models";
 import {
   completedGroups,
@@ -189,7 +190,12 @@ export function KitchenDisplayScreen() {
           <BrandMark size={22} />
           <Text style={styles.brand}>Smart Serve</Text>
         </View>
-        <Text style={styles.kitchenTag}>KITCHEN</Text>
+        {/* Kitchen staff see only this tab, so this is their one route to
+            printer settings and sign-out. */}
+        <View style={styles.appBarEnd}>
+          <Text style={styles.kitchenTag}>KITCHEN</Text>
+          <ProfileButton />
+        </View>
       </View>
 
       {/* Status filter bar — underline marks the active tab */}
@@ -401,6 +407,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.s3,
   },
   brandRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
+  appBarEnd: { flexDirection: "row", alignItems: "center", gap: space.s3 },
   brand: {
     fontFamily: fonts.extrabold,
     fontSize: 20,
