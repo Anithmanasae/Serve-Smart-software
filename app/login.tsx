@@ -61,7 +61,7 @@ export default function Login() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.brand}>
-          <BrandLogo size={88} />
+          <BrandLogo size={112} />
           <Text style={styles.sub}>Sign in to continue</Text>
           {/* Build verification you can see without a debugger: WHICH Firebase
               backend this APK talks to. A build can silently pick up EAS's

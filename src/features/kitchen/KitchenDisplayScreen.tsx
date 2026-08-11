@@ -187,7 +187,7 @@ export function KitchenDisplayScreen() {
       {/* App header */}
       <View style={styles.appBar}>
         <View style={styles.brandRow}>
-          <BrandMark size={22} />
+          <BrandMark size={34} />
           <Text style={styles.brand}>Brew Brothers</Text>
         </View>
         {/* Kitchen staff see only this tab, so this is their one route to

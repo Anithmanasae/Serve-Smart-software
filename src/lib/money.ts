@@ -20,8 +20,17 @@ export function rupeesToPaise(rupees: number): number {
 }
 
 /**
- * 8500 paise -> "₹85.00". Uses Indian digit grouping (e.g. ₹1,23,456.00)
+ * 8500 paise -> "₹85". Uses Indian digit grouping (e.g. ₹1,23,456)
  * implemented manually so it doesn't depend on Intl/Hermes locale data.
+ *
+ * A whole-rupee amount prints WITHOUT decimals: every price on the menu is
+ * whole rupees, so ".00" was two characters of noise on every card, every
+ * cart line and every bill — enough to wrap a price onto a second line in a
+ * narrow card.
+ *
+ * An amount with real paise keeps them (₹1,234.56). GST on an odd subtotal
+ * lands on paise routinely, and a bill whose lines silently dropped them
+ * would not add up to its own total.
  */
 export function formatMoney(paise: number): string {
   const negative = paise < 0;
@@ -41,7 +50,8 @@ export function formatMoney(paise: number): string {
     grouped = `${withCommas},${last3}`;
   }
 
-  return `${negative ? "-" : ""}${TAX_CONFIG.currencySymbol}${grouped}.${paisePart}`;
+  const decimals = paisePart === "00" ? "" : `.${paisePart}`;
+  return `${negative ? "-" : ""}${TAX_CONFIG.currencySymbol}${grouped}${decimals}`;
 }
 
 export interface BillLine {

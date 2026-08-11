@@ -614,7 +614,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         <View style={styles.tabletBar}>
           {backButton}
           <View style={styles.brandRow}>
-            <BrandMark size={22} />
+            <BrandMark size={34} />
             <Text style={styles.brand}>Brew Brothers</Text>
           </View>
           <Text style={styles.tabletTitle}>New Order</Text>
@@ -666,7 +666,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       <View style={styles.appBar}>
         <View style={styles.brandRow}>
           {backButton}
-          <BrandMark size={20} />
+          <BrandMark size={32} />
           <Text style={styles.brand}>Brew Brothers</Text>
         </View>
         <Text style={styles.bell}>🔔</Text>
