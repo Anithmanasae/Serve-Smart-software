@@ -1,23 +1,30 @@
 import { Tabs } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
+import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { StyleSheet, type ColorValue } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { BlurView } from "expo-blur";
 import { useAuth } from "@/features/auth/AuthContext";
 import { ROLE_ACCESS } from "@/features/auth/roleRoutes";
 import { useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { colors, fonts } from "@/theme/theme";
 
-type IconName = Extract<keyof typeof Ionicons.glyphMap, string>;
+type IconName = Extract<keyof typeof MaterialCommunityIcons.glyphMap, string>;
 
 // Outline glyph when inactive, filled (brand-tinted) when active.
 // `override` lets the tablet bar draw a larger glyph than the navigator's
 // phone-scale default.
+//
+// Material Community over Ionicons: it is the only family bundled with
+// `@expo/vector-icons` that has an actual restaurant vocabulary, and every
+// glyph the bar uses has a matching `-outline` cut, so the filled/outline
+// pairing survives the swap. Two of them carry real meaning that the Ionicons
+// set did not — a steaming pot is the kitchen, where a flame reads as
+// "trending"; and `chart-box` sits on the same optical square as its
+// neighbours where `stats-chart` floated small between them.
 const icon =
   (name: IconName, override?: number) =>
   ({ color, size, focused }: { color: ColorValue; size: number; focused: boolean }) => (
-    <Ionicons
+    <MaterialCommunityIcons
       name={focused ? name : (`${name}-outline` as IconName)}
       size={override ?? size}
       color={color}
@@ -68,12 +75,17 @@ export default function TabsLayout() {
         animation: "fade",
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
-        // Frosted glass: drop the hard top hairline and let a blur panel sit
-        // behind the (transparent) bar.
+        // OPAQUE, with a real edge. The bar used to be transparent over a
+        // `BlurView` — but the canvas behind it is `colors.bg` (#f4f5f7) and
+        // the wash on top was 72% white, so there was nothing dark enough to
+        // frost: the blur cost an Android render pass to produce a flat pale
+        // band. With `borderTopWidth: 0` on top of that, the bar had no edge
+        // at all and content dissolved into it. A bar needs one of a hairline,
+        // real elevation, or genuinely strong blur; this now has the first two.
         tabBarStyle: {
-          backgroundColor: "transparent",
-          borderTopWidth: 0,
-          elevation: 0,
+          backgroundColor: colors.surface,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderTopColor: colors.border,
           // An explicit height opts out of the navigator's own safe-area
           // padding, so the gesture inset has to be added back by hand.
           ...(isTablet
@@ -84,16 +96,11 @@ export default function TabsLayout() {
               }
             : null),
         },
-        tabBarBackground: () => (
-          <BlurView
-            tint="light"
-            intensity={40}
-            style={[StyleSheet.absoluteFill, styles.tabBlur]}
-          />
-        ),
+        // 11 is the floor in both the HIG and Material 3; the old phone size
+        // of 10 is the single most reliable "homemade" tell in a tab bar.
         tabBarLabelStyle: {
           fontFamily: fonts.semibold,
-          fontSize: isTablet ? 12 : 10,
+          fontSize: isTablet ? 12 : 11,
         },
       }}
     >
@@ -102,7 +109,7 @@ export default function TabsLayout() {
         options={{
           title: "Insights",
           href: can("insights") ? "/insights" : null,
-          tabBarIcon: glyph("stats-chart"),
+          tabBarIcon: glyph("chart-box"),
         }}
       />
       <Tabs.Screen
@@ -110,7 +117,7 @@ export default function TabsLayout() {
         options={{
           title: "Menu",
           href: can("menuAdmin") ? "/menu" : null,
-          tabBarIcon: glyph("restaurant"),
+          tabBarIcon: glyph("food"),
         }}
       />
       <Tabs.Screen
@@ -118,7 +125,7 @@ export default function TabsLayout() {
         options={{
           title: "Tables",
           href: can("tables") ? "/tables" : null,
-          tabBarIcon: glyph("grid"),
+          tabBarIcon: glyph("view-grid"),
         }}
       />
       <Tabs.Screen
@@ -134,7 +141,7 @@ export default function TabsLayout() {
         options={{
           title: "KDS",
           href: can("kds") ? "/kds" : null,
-          tabBarIcon: glyph("flame"),
+          tabBarIcon: glyph("pot-steam"),
         }}
       />
       <Tabs.Screen
@@ -142,7 +149,7 @@ export default function TabsLayout() {
         options={{
           title: "Bills",
           href: can("bills") ? "/bills" : null,
-          tabBarIcon: glyph("receipt"),
+          tabBarIcon: glyph("receipt-text"),
         }}
       />
       {/* No Account tab. It is a stack screen reached from the profile button
@@ -152,8 +159,3 @@ export default function TabsLayout() {
     </Tabs>
   );
 }
-
-const styles = StyleSheet.create({
-  // Translucent wash over the blur so labels/icons stay legible.
-  tabBlur: { backgroundColor: "rgba(255,255,255,0.72)" },
-});

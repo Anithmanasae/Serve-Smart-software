@@ -1,64 +1,73 @@
 /**
- * Brew Brothers brand lockup — the round gold-on-black cup badge, optionally
- * stacked over the wordmark.
+ * Smart Serve brand lockup — a serving cloche whose handle is a sparkle
+ * ("serve" + "smart"), optionally stacked over the wordmark.
  *
- * Raster, not vector: the mark is the owner's own logo rather than geometry we
- * can redraw, and its gold is a two-tone gradient no single theme colour would
- * reproduce. `assets/brand/bb-mark.png` is the cup cut out as its own disc —
- * the full badge's baked-in "BREW BROTHERS" is unreadable at the 22px the app
- * bars use, so the lockup sets the name as real Plus Jakarta Sans beside it and
- * stays crisp at every size. The launcher, splash and login assets come off the
- * same source via `scripts/generateBrewBrothersAssets.js`; change one, re-run
- * the other.
- *
- * The mark carries its own black disc, so unlike the old cloche it does NOT
- * take a colour — `color` tints the wordmark only.
+ * Vector via react-native-svg and real Plus Jakarta Sans, so it stays crisp at
+ * any size and picks up theme colors — unlike a raster logo. The launcher icon
+ * and splash PNGs in `assets/brand/` are generated from the same geometry by
+ * `scripts/generateBrandAssets.js`; change one, re-run the other.
  */
 import { StyleSheet, Text, View } from "react-native";
-import { Image } from "expo-image";
+import Svg, { Path, Rect } from "react-native-svg";
 import { colors, fonts } from "@/theme/theme";
 
-const MARK = require("../../assets/brand/bb-mark.png");
-
-export function BrandMark({ size = 96 }: { size?: number }) {
+/** Four-point sparkle: control points at 0.24r give the pinched waist. */
+function sparklePath(cx: number, cy: number, r: number): string {
+  const k = r * 0.24;
   return (
-    <Image
-      source={MARK}
-      style={{ width: size, height: size }}
-      contentFit="contain"
-      // The badge is a disc on transparency; letting it fade in would flash a
-      // hole in the app bar on every mount.
-      transition={0}
-      cachePolicy="memory-disk"
-    />
+    `M ${cx} ${cy - r} ` +
+    `C ${cx} ${cy - k} ${cx + k} ${cy} ${cx + r} ${cy} ` +
+    `C ${cx + k} ${cy} ${cx} ${cy + k} ${cx} ${cy + r} ` +
+    `C ${cx} ${cy + k} ${cx - k} ${cy} ${cx - r} ${cy} ` +
+    `C ${cx - k} ${cy} ${cx} ${cy - k} ${cx} ${cy - r} Z`
+  );
+}
+
+// The viewBox is cropped to the mark's ink so callers size it by what they see.
+const VIEW_BOX = "20 26 80 68";
+const ASPECT = 80 / 68;
+
+export function BrandMark({
+  size = 96,
+  color = colors.primary,
+}: {
+  /** Height of the mark in px; width follows the 80:68 ink ratio. */
+  size?: number;
+  color?: string;
+}) {
+  return (
+    <Svg width={size * ASPECT} height={size} viewBox={VIEW_BOX}>
+      <Path d="M 30 81 A 30 30 0 0 1 90 81 Z" fill={color} />
+      <Rect x={20} y={85} width={80} height={9} rx={4.5} fill={color} />
+      <Path d={sparklePath(60, 39, 13)} fill={color} />
+      <Path d={sparklePath(86, 33, 5.5)} fill={color} />
+    </Svg>
   );
 }
 
 export function BrandLogo({
   size = 96,
-  color = colors.text,
+  color = colors.primary,
   showWordmark = true,
 }: {
   size?: number;
-  /** Wordmark colour only — the mark brings its own black and gold. */
   color?: string;
   showWordmark?: boolean;
 }) {
   return (
     <View style={styles.root}>
-      <BrandMark size={size} />
+      <BrandMark size={size} color={color} />
       {showWordmark && (
         <Text
           style={[
             styles.wordmark,
-            // 0.26 of a SQUARE mark, where the old cloche's 0.34 was of a
-            // wider one — the ratio that keeps the type about 1.2x the mark's
-            // width, so the lockup still reads as one unit.
-            { fontSize: size * 0.26, color, marginTop: size * 0.14 },
+            // 0.34 sets the wordmark ~1.7x the mark's width — the lockup reads
+            // as one unit; much larger and the type swamps the cloche.
+            { fontSize: size * 0.34, color, marginTop: size * 0.2 },
           ]}
           allowFontScaling={false}
         >
-          Brew Brothers
+          Smart Serve
         </Text>
       )}
     </View>
