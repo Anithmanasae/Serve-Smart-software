@@ -1,31 +1,38 @@
 /**
- * Kitchen Display (KDS) — live per-table board with the red/orange/green
- * status system.
+ * Kitchen Display (KDS) — live board of paper-style KOT tickets.
  *
- * Three underline-style filter tabs with live circular counts:
- *   ORDERS (red)      — every table with an active ticket (new/preparing/ready)
- *   ADDITIONAL (orange) — tables with a 2nd+ active ticket (a later round)
- *   COMPLETED (green) — today's completed tickets, newest first
+ * ONE CARD PER TABLE, oldest first. When a table orders again, those dishes
+ * join the card already on the board — highlighted, so a cook who has read
+ * this ticket can see what's new (see TableTicketCard). That is why the board
+ * needs no "additional" filter: the thing that tab existed to surface now
+ * lives on the ticket itself, next to the food it belongs with. There is no
+ * "completed" filter either — completing is the kitchen saying it's off the
+ * board, and a KDS that keeps showing finished work stops answering "what's
+ * left". The day's completed tickets are still in the cashier's screens and
+ * in reports.
  *
- * Cards are one per table (see groupKots) in a high-density grid sized so a
- * whole number of rows fits the screen — 3×3 on a phone, wider and deeper on
- * a tablet (see `boardRows`); the list scrolls to reveal more tables. Each
- * card shows its 1-based FIFO queue position. Fully real-time via the ported
- * hooks; writes only through kdsApi.
+ * Two filters remain, with live counts:
+ *   ORDERS (red)     — every table with an active ticket (new/preparing/ready)
+ *   TAKEAWAY (blue)  — the counter orders among them
+ *
+ * Cards size to their contents and are laid out in a masonry of 2 columns on a
+ * phone (3–4 on a tablet), filled round-robin so reading order stays FIFO
+ * left-to-right. The board scrolls: no ticket is ever truncated, and scrolling
+ * far enough reveals every one of them. Fully real-time; writes only through
+ * kdsApi.
  */
 import { useMemo, useState } from "react";
 import {
-  FlatList,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { orderBy, query, Timestamp, where } from "firebase/firestore";
+import { orderBy, query, where } from "firebase/firestore";
 import { paths } from "@/lib/firestore/paths";
 import { useCollectionData } from "@/lib/firestore/useRealtime";
-import { startOfDayIST } from "@/lib/date";
 import { feel } from "@/lib/feedback";
 import { useResponsive } from "@/lib/responsive";
 import { colors, fonts, radius, space } from "@/theme/theme";
@@ -33,72 +40,40 @@ import { BrandHeader } from "@/components/BrandHeader";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import type { Kot } from "@/types/models";
-import {
-  completedGroups,
-  groupActiveKots,
-  hasAdditionalRound,
-  type TableGroup,
-} from "./groupKots";
+import { groupActiveKots, type LiveKot } from "./groupKots";
+import { NewKotAlertBanner, useNewKotAlerts } from "./newKotAlerts";
 import { TableTicketCard } from "./TableTicketCard";
 import { TicketDetailSheet } from "./TicketDetailSheet";
 
-const COLS = 3;
-const ROWS = 3;
 const GAP = space.s3;
 
-/**
- * The shortest a ticket may be drawn, from TableTicketCard's own box model:
- *
- *   96  fixed chrome (borders 2, body padding 16, header 18, elapsed ~14,
- *       items margin 8, COMPLETE button 38)
- * + 70  items at their worst — MAX_ITEM_LINES rows at lineHeight 15, the
- *       "+N more…" row a 4-item ticket adds, and the gaps between them
- * ─────
- *   166
- *
- * Rounded up for headroom, because the two "~" figures above are RN's default
- * line heights rather than measured ones. `items` is `overflow: hidden`, so
- * coming up short doesn't shrink the card — it silently eats the "+N more…"
- * line, which is exactly the cue telling the cook to tap for the rest of the
- * ticket. Losing that is worse than showing one row fewer.
- */
-const MIN_CARD_H = 170;
-
-/**
- * How many rows of whole cards a board of `gridH` can hold.
- *
- * The phone keeps its fixed 3×3 — that density is the screen's whole design.
- * A tablet instead takes the TALLEST board whose cards still clear
- * `MIN_CARD_H`, because a KDS is a queue: seeing one more ticket is worth
- * more than seeing the same ticket bigger, right up until it stops being
- * readable. The board still shows whole cards and never a sliced row.
- */
-function boardRows(gridH: number): number {
-  for (let rows = 6; rows > 2; rows -= 1) {
-    if (Math.floor((gridH - rows * GAP) / rows) >= MIN_CARD_H) return rows;
-  }
-  return ROWS;
-}
-
-type Tab = "orders" | "takeaway" | "additional" | "completed";
-
-type GridEntry = TableGroup | { key: string; spacer: true };
+type Tab = "orders" | "takeaway";
 
 const EMPTY_COPY: Record<Tab, string> = {
-  orders: "No active orders — new KOTs appear here instantly.",
+  orders: "No active tickets — new KOTs appear here instantly.",
   takeaway: "No takeaway orders in the kitchen right now.",
-  additional: "No table has an additional round right now.",
-  completed: "No completed tickets yet today.",
 };
+
+/**
+ * Deal `items` round-robin into `cols` columns.
+ *
+ * Round-robin rather than shortest-column packing: the cook reads the board as
+ * a queue, so ticket 1 must be top-left and ticket 2 next to it. Balancing by
+ * height would reorder the queue to make the columns pretty.
+ */
+function toColumns<T>(items: T[], cols: number): T[][] {
+  const out: T[][] = Array.from({ length: cols }, () => []);
+  items.forEach((item, i) => out[i % cols].push(item));
+  return out;
+}
 
 export function KitchenDisplayScreen() {
   const insets = useSafeAreaInsets();
   const { width, isTablet } = useResponsive();
   const [tab, setTab] = useState<Tab>("orders");
-  const [gridH, setGridH] = useState(0);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
-  // Live queries — identity stable across renders.
+  // Live query — identity stable across renders.
   const activeQuery = useMemo(
     () =>
       query(
@@ -108,79 +83,41 @@ export function KitchenDisplayScreen() {
       ),
     []
   );
-  const dayStart = useMemo(() => Timestamp.fromDate(startOfDayIST()), []);
-  const completedQuery = useMemo(
-    () =>
-      query(
-        paths.kots(),
-        where("status", "==", "completed"),
-        where("createdAt", ">=", dayStart),
-        orderBy("createdAt", "asc")
-      ),
-    [dayStart]
-  );
 
   const activeState = useCollectionData<Kot>(activeQuery);
-  const completedState = useCollectionData<Kot>(completedQuery);
 
-  const activeGroups = useMemo(
-    () => groupActiveKots(activeState.data),
+  const groups = useMemo(
+    () => groupActiveKots(activeState.data as LiveKot[]),
     [activeState.data]
-  );
-  const additionalGroups = useMemo(
-    () => activeGroups.filter(hasAdditionalRound),
-    [activeGroups]
   );
   // Counter orders (takeaway/delivery) — every ticket in a group shares one
   // order, so the first ticket's type describes the whole group.
   const takeawayGroups = useMemo(
-    () => activeGroups.filter((g) => g.tickets[0].orderType !== "dine-in"),
-    [activeGroups]
-  );
-  const doneGroups = useMemo(
-    () => completedGroups(completedState.data),
-    [completedState.data]
+    () => groups.filter((g) => g.tickets[0].orderType !== "dine-in"),
+    [groups]
   );
 
-  const visible =
-    tab === "orders"
-      ? activeGroups
-      : tab === "takeaway"
-        ? takeawayGroups
-        : tab === "additional"
-          ? additionalGroups
-          : doneGroups;
+  const visible = tab === "orders" ? groups : takeawayGroups;
 
-  // A tablet gets a wider board in landscape, where 3 columns would stretch
-  // each ticket into a squat letterbox. Portrait keeps 3 — the same card
-  // proportions the phone board was designed around.
-  const cols = isTablet ? (width >= 1100 ? 4 : COLS) : COLS;
-  const rows = isTablet ? boardRows(gridH) : ROWS;
+  const cols = isTablet ? (width >= 1100 ? 4 : 3) : 2;
+  const columns = useMemo(() => toColumns(visible, cols), [visible, cols]);
 
-  // Pad the last row so a lone card doesn't stretch across the grid.
-  const gridData: GridEntry[] = useMemo(() => {
-    const d: GridEntry[] = [...visible];
-    while (d.length % cols !== 0)
-      d.push({ key: `spacer-${d.length}`, spacer: true });
-    return d;
-  }, [visible, cols]);
-
-  // Exactly `rows` rows visible: card height derived from the measured grid.
-  const cardH = gridH > 0 ? Math.floor((gridH - rows * GAP) / rows) : 0;
+  // Announce incoming tickets — chime, haptic and banner. Fed the flat kot
+  // list, not the groups: a table's second round adds no card, and that is
+  // precisely the order a busy kitchen misses. The loading flag matters — see
+  // the hook: without it the empty pre-snapshot state becomes the baseline and
+  // the board announces itself on every launch.
+  const newOrderAlert = useNewKotAlerts(
+    activeState.data as LiveKot[],
+    !activeState.loading
+  );
 
   // Detail sheet target, resolved live so it tracks (and auto-closes on)
-  // realtime changes — e.g. completing from the sheet removes the group.
-  const selectedGroup = useMemo(() => {
-    if (!selectedKey) return null;
-    return (
-      activeGroups.find((g) => g.key === selectedKey) ??
-      doneGroups.find((g) => g.key === selectedKey) ??
-      null
-    );
-  }, [selectedKey, activeGroups, doneGroups]);
-
-  const loading = activeState.loading || completedState.loading;
-  const error = activeState.error ?? completedState.error;
+  // realtime changes — e.g. completing from the sheet drops the group.
+  const selected = useMemo(
+    () => (selectedKey ? (groups.find((g) => g.key === selectedKey) ?? null) : null),
+    [selectedKey, groups]
+  );
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -199,7 +136,7 @@ export function KitchenDisplayScreen() {
       <View style={styles.tabs}>
         <StatusTab
           label="ORDERS"
-          count={activeGroups.length}
+          count={groups.length}
           color={colors.statusRed}
           active={tab === "orders"}
           large={isTablet}
@@ -213,130 +150,94 @@ export function KitchenDisplayScreen() {
           large={isTablet}
           onPress={() => setTab("takeaway")}
         />
-        <StatusTab
-          label="ADDITIONAL"
-          count={additionalGroups.length}
-          color={colors.statusIndigo}
-          active={tab === "additional"}
-          large={isTablet}
-          onPress={() => setTab("additional")}
-        />
-        <StatusTab
-          label="COMPLETED"
-          count={doneGroups.length}
-          color={colors.statusGreen}
-          active={tab === "completed"}
-          large={isTablet}
-          onPress={() => setTab("completed")}
-        />
       </View>
 
       {/* Board */}
-      {error ? (
+      {activeState.error ? (
         <View style={styles.center}>
           <Text style={styles.errorText}>Couldn’t load tickets.</Text>
-          <Text style={styles.emptySub}>{error.message}</Text>
+          <Text style={styles.emptySub}>{activeState.error.message}</Text>
+        </View>
+      ) : activeState.loading ? (
+        <BoardSkeleton cols={cols} />
+      ) : visible.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={styles.emptyText}>Nothing here.</Text>
+          <Text style={styles.emptySub}>{EMPTY_COPY[tab]}</Text>
         </View>
       ) : (
-        // The board measures itself before either state draws, so the grey
-        // tickets are laid out on exactly the grid the real ones will use.
-        <View
-          style={styles.gridWrap}
-          onLayout={(e) => setGridH(e.nativeEvent.layout.height)}
+        <ScrollView
+          style={styles.board}
+          contentContainerStyle={{ paddingBottom: insets.bottom + space.s6 }}
+          showsVerticalScrollIndicator={false}
         >
-          {cardH > 0 && loading && (
-            <BoardSkeleton cols={cols} rows={rows} cardH={cardH} />
-          )}
-          {cardH > 0 && !loading && (
-            <FlatList
-              // RN cannot change `numColumns` on a live list — remounting on
-              // the count is what lets the board re-flow across a rotation.
-              key={`board-${cols}`}
-              data={gridData}
-              keyExtractor={(g) => g.key}
-              numColumns={cols}
-              columnWrapperStyle={styles.gridRow}
-              contentContainerStyle={{
-                flexGrow: 1, // lets the empty state center itself
-                paddingBottom: insets.bottom + space.s4,
-              }}
-              showsVerticalScrollIndicator={false}
-              renderItem={({ item, index }) =>
-                "spacer" in item ? (
-                  <View style={styles.cell} />
-                ) : (
-                  <View style={[styles.cell, { height: cardH }]}>
-                    <TableTicketCard
-                      group={item}
-                      queue={index + 1}
-                      onPress={() => setSelectedKey(item.key)}
-                    />
-                  </View>
-                )
-              }
-              ListEmptyComponent={
-                <View style={styles.center}>
-                  <Text style={styles.emptyText}>Nothing here.</Text>
-                  <Text style={styles.emptySub}>{EMPTY_COPY[tab]}</Text>
-                </View>
-              }
-            />
-          )}
-        </View>
+          <View style={styles.masonry}>
+            {columns.map((col, i) => (
+              <View key={i} style={styles.column}>
+                {col.map((group) => (
+                  <TableTicketCard
+                    key={group.key}
+                    group={group}
+                    onPress={() => setSelectedKey(group.key)}
+                  />
+                ))}
+              </View>
+            ))}
+          </View>
+          {/* Counts TICKETS, not cards — a table's second round is another
+              KOT the kitchen has to cook, even though it shares a card. */}
+          <Text style={styles.totalKot}>
+            Total KOT : {visible.reduce((n, g) => n + g.tickets.length, 0)}
+          </Text>
+        </ScrollView>
       )}
 
       {/* Tap-a-card detail popup */}
-      {selectedGroup && (
+      {selected && (
         <TicketDetailSheet
-          group={selectedGroup}
+          group={selected}
           onClose={() => setSelectedKey(null)}
         />
       )}
+
+      {/* Last child, so the arrival banner sits over the board and the sheet. */}
+      <NewKotAlertBanner alert={newOrderAlert} topOffset={insets.top + space.s2} />
     </View>
   );
 }
 
 /**
- * The board mid-load: a full grid of grey tickets at the measured `cardH`.
+ * The board mid-load: paper-shaped grey tickets on the same masonry.
  *
- * Filling every slot rather than showing three is deliberate here — a KDS is
- * read from across a kitchen as "how much work is on", and a half-empty grey
+ * Filling both columns rather than showing one card is deliberate — a KDS is
+ * read from across a kitchen as "how much work is on", and a near-empty grey
  * board would answer that question wrongly for the second or two before the
  * real tickets arrive. A full one says only "not yet".
  */
-function BoardSkeleton({
-  cols,
-  rows,
-  cardH,
-}: {
-  cols: number;
-  rows: number;
-  cardH: number;
-}) {
+function BoardSkeleton({ cols }: { cols: number }) {
   return (
-    <Skeleton style={styles.skeletonBoard}>
-      {Array.from({ length: rows }, (_, r) => (
-        <View key={r} style={styles.skeletonRow}>
-          {Array.from({ length: cols }, (_, c) => (
-            <View key={c} style={[styles.cell, { height: cardH }]}>
-              <View style={styles.skeletonCard}>
-                {/* The queue-position stripe TableTicketCard paints in its
-                    status colour. */}
-                <Bone width={20} height="100%" round={0} />
-                <View style={styles.skeletonBody}>
-                  <View style={styles.skeletonHeader}>
-                    <Bone width={52} height={15} />
-                    <Bone width={28} height={11} />
-                  </View>
-                  <Bone width="92%" height={10} />
-                  <Bone width="74%" height={10} />
-                  <Bone width="84%" height={10} />
-                </View>
+    <Skeleton style={styles.board}>
+      <View style={styles.masonry}>
+        {Array.from({ length: cols }, (_, c) => (
+          <View key={c} style={styles.column}>
+            {Array.from({ length: 2 }, (_, r) => (
+              <View key={r} style={styles.skeletonCard}>
+                <Bone width="52%" height={16} />
+                <Bone width="38%" height={13} />
+                <View style={styles.skeletonGap} />
+                <Bone width="80%" height={10} />
+                <Bone width="90%" height={10} />
+                <View style={styles.skeletonGap} />
+                <Bone width="94%" height={12} />
+                <Bone width="86%" height={12} />
+                <Bone width="90%" height={12} />
+                <View style={styles.skeletonGap} />
+                <Bone width="100%" height={38} round={radius.sm} />
               </View>
-            </View>
-          ))}
-        </View>
-      ))}
+            ))}
+          </View>
+        ))}
+      </View>
     </Skeleton>
   );
 }
@@ -459,50 +360,39 @@ const styles = StyleSheet.create({
   tabBadgeTextLarge: {
     fontSize: 12,
   },
-  gridWrap: {
+  board: {
     flex: 1,
     paddingHorizontal: space.s4,
   },
-  gridRow: {
+  masonry: {
+    flexDirection: "row",
+    alignItems: "flex-start",
     gap: GAP,
-    marginBottom: GAP,
   },
-  cell: {
+  column: {
     flex: 1,
+    gap: GAP,
+  },
+  totalKot: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    color: colors.textMuted,
+    textAlign: "center",
+    marginTop: space.s4,
   },
 
   // ── Loading placeholder ─────────────────────────────────────────────────
-  // `skeletonRow` is `gridRow` plus the row direction FlatList supplies for
-  // free via `columnWrapperStyle`; `skeletonCard` is TableTicketCard's frame.
-  skeletonBoard: {
-    flex: 1,
-    overflow: "hidden",
-  },
-  skeletonRow: {
-    flexDirection: "row",
-    gap: GAP,
-    marginBottom: GAP,
-  },
   skeletonCard: {
-    flex: 1,
-    flexDirection: "row",
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
-    overflow: "hidden",
-  },
-  skeletonBody: {
-    flex: 1,
-    paddingHorizontal: space.s2,
-    paddingVertical: space.s2,
+    padding: space.s3,
     gap: space.s2,
-  },
-  skeletonHeader: {
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    gap: space.s1,
+  },
+  skeletonGap: {
+    height: space.s1,
   },
   center: {
     flex: 1,

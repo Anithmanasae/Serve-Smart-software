@@ -22,6 +22,7 @@ import { formatMoney } from "@/lib/money";
 import { dayKey, formatTimeIST } from "@/lib/date";
 import { feel } from "@/lib/feedback";
 import { colors, radius, shadow, space } from "@/theme/theme";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import {
   NC_REASON_LABELS,
   VOID_REASON_LABELS,
@@ -91,20 +92,20 @@ export function BillHistoryScreen() {
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
-      <View style={styles.header}>
-        <Pressable
-          style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
-          onPress={() => router.back()}
-          onPressIn={feel.dismiss}
-          hitSlop={8}
-        >
-          <Text style={styles.backBtnText}>‹ Back</Text>
-        </Pressable>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Bill History</Text>
-          <Text style={styles.subtitle}>Settled bills · last 30 days</Text>
-        </View>
-      </View>
+      <ScreenHeader
+        title="Bill History"
+        subtitle="Settled bills · last 30 days"
+        left={
+          <Pressable
+            style={({ pressed }) => [styles.backBtn, pressed && styles.pressed]}
+            onPress={() => router.back()}
+            onPressIn={feel.dismiss}
+            hitSlop={8}
+          >
+            <Text style={styles.backBtnText}>‹ Back</Text>
+          </Pressable>
+        }
+      />
 
       <SectionList
         sections={sections}
@@ -213,13 +214,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   pressed: { opacity: 0.7 },
 
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.s3,
-    paddingHorizontal: space.s4,
-    paddingVertical: space.s3,
-  },
   backBtn: {
     paddingHorizontal: space.s3,
     paddingVertical: space.s2,
@@ -229,9 +223,6 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   backBtnText: { fontSize: 14, fontWeight: "600", color: colors.text },
-  headerText: { flex: 1 },
-  title: { fontSize: 22, fontWeight: "800", color: colors.text },
-  subtitle: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
 
   list: { paddingHorizontal: space.s4, gap: space.s3 },
   sectionHeader: {

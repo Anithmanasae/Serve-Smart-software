@@ -39,7 +39,14 @@ also run the three suites that cover it:
 E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/nonChargeable.e2e.ts
 E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/voidBill.e2e.ts
 E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/offers.e2e.ts
+E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/discardOrder.e2e.ts
 ```
+
+`discardOrder.e2e.ts` is the odd one out: its guards live in `cashierApi`, not
+in `firestore.rules` — the rules can't scan an array for "no line carries a
+`kotId`", and `cancelled` is a write they already allow (it's what voiding a
+bill does). That suite IS the enforcement, so run it after ANY change to
+`discardOrder` or the order lifecycle.
 
 The emulators need a JDK. There is none on PATH; Android Studio's bundled one
 works:
@@ -78,7 +85,29 @@ node scripts/auditTenants.js --tenant <id> # one tenant in full detail
 
 # The wrong person registered and holds the cashier seat:
 node scripts/reassignCashier.js --to <new@email> --from <old@email> --confirm
+
+# Abandoned orders (read-only without --confirm, like activateTenant):
+node scripts/cancelStaleOrders.js --tenant <rid>                    # candidates
+node scripts/cancelStaleOrders.js --tenant <rid> --empty --confirm  # 0-line husks
+
+# KOT numbering left over from the old 4000 seed:
+node scripts/resetKotCounter.js --tenant <rid>                       # show state
+node scripts/resetKotCounter.js --tenant <rid> --renumber --confirm  # 1..N
 ```
+
+`resetKotCounter` exists because `counters/kotTicket` used to seed at 4000
+(first ticket #4001) and a seed only applies to a counter that doesn't exist
+yet — tenants created before the seed became 0 keep their old run of numbers.
+It refuses to reset past a ticket that already exists; `--renumber` rewrites
+the existing tickets in fire order first. Only ever point `--renumber` at a
+test tenant: a KOT number the kitchen or a printed ticket has already seen
+should not change under them.
+
+`cancelStaleOrders` marks orders `cancelled` — never deletes — and refuses any
+order that has a `billId` or that isn't `open`. The in-app **Discard** button
+on the Bills screen ("Never sent to kitchen") covers the same ground for the
+cashier; the script is for the 0-line husks, which are invisible in the app
+because every order list skips orders with no items.
 
 `reassignCashier` exists because nothing **inside** the app can move the owner
 seat: `meta/bootstrap.cashierClaimed` blocks a re-claim, and a cashier's update
@@ -237,9 +266,60 @@ The load-bearing decisions:
 - **No in-app mute switch.** `performHapticFeedback` already honours the
   system-wide touch-feedback setting, so the OS owns that choice.
 
-`kotAlerts.tsx` holds the only haptic the user did not ask for (the kitchen's
-READY toast). Keep it that way — unsolicited pulses are a budget the app should
-spend approximately once.
+The two **unsolicited** haptics live in the order alerts — `kotAlerts.tsx`
+(waiter: your food is READY) and `newKotAlerts.tsx` (kitchen: an order landed).
+Both mean "walk somewhere now", which is the bar. Keep it there — pulses the
+user did not ask for are a budget, and it is spent.
+
+## Order alerts (read before adding another)
+
+Two mirrored, purely client-side alerts. Both work by diffing consecutive
+snapshots of a kot subscription the screen already holds — no server, no push:
+
+| File | Watches for | Tells |
+|---|---|---|
+| `features/order/kotAlerts.tsx` | a status TRANSITION (→ preparing/ready) | the waiter |
+| `features/kitchen/newKotAlerts.tsx` | an ARRIVAL (an id not in the last snapshot) | the kitchen |
+
+The load-bearing decisions:
+
+- **The first snapshot only seeds the baseline** — and the baseline must wait
+  for `loading` to clear. `useCollectionData` reports an EMPTY array before its
+  first snapshot, so seeding from that makes the entire first snapshot look
+  like it just arrived and the board announces itself on every launch. That is
+  what `useNewKotAlerts`' `ready` argument is for; an alert that cries wolf on
+  launch is one the staff learn to ignore within a week.
+- **The kitchen alert diffs KOTs, not the table cards.** The board folds a
+  table's rounds into one card (`groupKots`), so a second round to a table that
+  already has a card changes no card at all — and that is exactly the order a
+  busy kitchen misses. Feed the hook the flat list.
+- **Sound is the kitchen's primary channel; the banner and haptic are backup.**
+  A cook is at the pass with their hands full, not watching a tablet. That
+  inverts the usual priority and is why this is the one sound in the app.
+- **The chime repeats while the ticket is `new`, and `new` IS the acknowledge.**
+  Pressing START silences it, so the ack is something the kitchen was going to
+  do anyway rather than a dismiss button bolted on to shut the app up. It gives
+  up after `MAX_REPEATS` (~2 min): a kitchen that has ignored six chimes will
+  not be moved by a seventh, and past that it is just noise — noise being what
+  gets the volume turned down for the whole service.
+- **The nag timer is keyed on the ARRIVAL, never on `kots` or the pending
+  count.** Those change on every write during service, and re-keying would
+  restart the interval each time — so on the busiest board the nag would never
+  fire at all. See the comment in the hook before changing that dependency.
+- **`expo-audio` is a NATIVE module: sound only exists in an APK built after it
+  landed.** `lib/kitchenChime.ts` wraps every entry point and degrades to
+  banner + haptic on an older install, the same way a pre-USB build reports
+  Bluetooth-only. A kitchen screen must never break because it couldn't beep.
+  It uses a lazy `require`, not a static import — a static one is hoisted and
+  throws at import time, before any try/catch can run.
+- **The chime asset is GENERATED, not downloaded**, by
+  `node scripts/generateChime.js` → `assets/sounds/new-order.wav`. Tune it
+  there; that file explains why it is three ascending notes in the 1–2kHz band
+  (a kitchen is loud and reverberant, and the ear finds a melody in noise far
+  better than a beep).
+
+Neither alert reaches a **backgrounded** app. Real push needs
+expo-notifications plus per-device tokens; both files carry the TODO.
 
 ## Legacy: the shared demo sandbox
 

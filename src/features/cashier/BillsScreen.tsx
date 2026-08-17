@@ -9,6 +9,13 @@
  * tappable — food first, pay after). All data is live; every write goes
  * through `cashierApi` — this screen never touches Firestore or does money
  * math.
+ *
+ * An order with NO ticket in the kitchen is neither of those things, and gets
+ * its own section. It used to be lumped in with "Preparing…", which was both a
+ * lie (nobody is cooking it — it was never sent) and a dead end (that card is
+ * untappable, and nothing else in the app could reach the order either), so a
+ * takeaway somebody started and walked away from sat on this screen forever
+ * and the list only grew. Those cards carry Discard.
  */
 import { useMemo, useState } from "react";
 import {
@@ -29,10 +36,16 @@ import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { BrandHeader } from "@/components/BrandHeader";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import type { Bill, Order, Table } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
-import { generateBill } from "./cashierApi";
+import {
+  discardOrder,
+  generateBill,
+  hasLiveKitchenLines,
+  wasEverSentToKitchen,
+} from "./cashierApi";
 import {
   useActiveBills,
   useAllTables,
@@ -43,7 +56,8 @@ import { BillDetail } from "./BillDetail";
 type BillRow = { kind: "bill"; bill: Bill & { id: string } };
 type OrderRow = { kind: "order"; order: Order & { id: string } };
 type PreparingRow = { kind: "preparing"; order: Order & { id: string } };
-type Row = BillRow | OrderRow | PreparingRow;
+type UnsentRow = { kind: "unsent"; order: Order & { id: string } };
+type Row = BillRow | OrderRow | PreparingRow | UnsentRow;
 
 const ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -82,6 +96,11 @@ export function BillsScreen() {
 
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
   const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const [discardingId, setDiscardingId] = useState<string | null>(null);
+  // The order whose discard confirm is on screen but unanswered — see
+  // `handleDiscard`. Kept apart from `discardingId`, which drives the spinner
+  // and only starts once the write is actually going.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const tableLabelById = useMemo(() => {
     const map = new Map<string, string>();
@@ -103,14 +122,24 @@ export function BillsScreen() {
     const orderRows: Row[] = [...orders]
       .sort((a, b) => (a.createdAt?.toMillis() ?? 0) - (b.createdAt?.toMillis() ?? 0))
       .map((order) => ({ kind: "order", order }));
-    const preparingRows: Row[] = [...preparing]
-      .sort((a, b) => (a.createdAt?.toMillis() ?? 0) - (b.createdAt?.toMillis() ?? 0))
+    // "Preparing…" is only true of an order the kitchen actually holds. The
+    // rest are notes somebody stopped writing, and they get to say so — and to
+    // be thrown away.
+    const byAge = [...preparing].sort(
+      (a, b) => (a.createdAt?.toMillis() ?? 0) - (b.createdAt?.toMillis() ?? 0)
+    );
+    const preparingRows: Row[] = byAge
+      .filter((order) => hasLiveKitchenLines(order))
       .map((order) => ({ kind: "preparing", order }));
+    const unsentRows: Row[] = byAge
+      .filter((order) => !hasLiveKitchenLines(order))
+      .map((order) => ({ kind: "unsent", order }));
 
     return [
       { title: "Bills", data: billRows },
       { title: "Ready to bill", data: orderRows },
       { title: "Preparing…", data: preparingRows },
+      { title: "Never sent to kitchen", data: unsentRows },
     ].filter((s) => s.data.length > 0);
   }, [bills, orders, preparing]);
 
@@ -137,25 +166,89 @@ export function BillsScreen() {
     }
   }
 
+  /**
+   * Throw away an order the kitchen never saw.
+   *
+   * Behind a confirm because it is the one button on this screen that destroys
+   * something, and what it destroys is named in the question. The AGE is in
+   * there for a reason: a waiter halfway through building a table's order also
+   * appears in this section for a few minutes, and "just now" is what stops a
+   * cashier throwing away an order somebody is still taking.
+   */
+  function handleDiscard(order: Order & { id: string }) {
+    // One confirm at a time. Guarding on `discardingId` alone wouldn't do it:
+    // that is only set once a confirm is ANSWERED, so two cards could each put
+    // a dialog up and the second answer would overwrite the first's spinner.
+    if (discardingId || confirmingId) return;
+    const lineCount = order.items.filter((i) => !i.voided).length;
+    const createdMs = order.createdAt?.toMillis() ?? null;
+    const age = createdMs === null ? "" : ` · started ${timeAgo(createdMs, Date.now())}`;
+    // An order whose ticketed lines were all voided is discardable for the
+    // same reason — nothing is on the pass — but it is not the same story, and
+    // telling the cashier no food was involved would be a lie about a dish
+    // somebody cooked.
+    const wasCooked = wasEverSentToKitchen(order);
+    setConfirmingId(order.id);
+    feel.warn(); // a destructive confirm is on screen
+    Alert.alert(
+      "Discard this order?",
+      `${orderLabel(order)} · ${lineCount} item${lineCount === 1 ? "" : "s"} · ${formatMoney(order.subtotal)}${age}\n\n` +
+        (wasCooked
+          ? "Every item that reached the kitchen has been voided, so nothing is on the pass and no money is involved. The order is cancelled and leaves this list."
+          : "Nothing was ever sent to the kitchen, so no food and no money are involved. The order is cancelled and leaves this list."),
+      [
+        {
+          text: "Keep",
+          style: "cancel",
+          onPress: () => {
+            setConfirmingId(null);
+            feel.dismiss();
+          },
+        },
+        {
+          text: "Discard",
+          style: "destructive",
+          onPress: async () => {
+            setConfirmingId(null);
+            setDiscardingId(order.id);
+            try {
+              await discardOrder(order.id);
+              feel.heavy(); // the destructive thing actually happened
+            } catch (e) {
+              feel.error();
+              Alert.alert(
+                "Could not discard",
+                e instanceof Error ? e.message : String(e)
+              );
+            } finally {
+              setDiscardingId(null);
+            }
+          },
+        },
+      ],
+      // Android's back button dismisses the dialog without answering it.
+      // Without this the screen would think a confirm was still up and refuse
+      // every later Discard.
+      { cancelable: true, onDismiss: () => setConfirmingId(null) }
+    );
+  }
+
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <BrandHeader />
       {/* Header — cashier identity */}
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {cashierName.charAt(0).toUpperCase()}
-          </Text>
-        </View>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Bills</Text>
-          <Text style={styles.subtitle}>
-            {cashierName}
-            {roleLabel ? ` · ${roleLabel}` : ""}
-          </Text>
-        </View>
-        <ProfileButton />
-      </View>
+      <ScreenHeader
+        title="Bills"
+        subtitle={`${cashierName}${roleLabel ? ` · ${roleLabel}` : ""}`}
+        left={
+          <View style={styles.avatar}>
+            <Text style={styles.avatarText}>
+              {cashierName.charAt(0).toUpperCase()}
+            </Text>
+          </View>
+        }
+        right={<ProfileButton />}
+      />
 
       {/* Two snapshots have to land before there is a ledger to show, so the
           first paint is bones rather than the empty-state line — which used
@@ -201,11 +294,19 @@ export function BillsScreen() {
                 disabled={generatingId !== null}
                 onPress={() => handleGenerate(item.order)}
               />
-            ) : (
+            ) : item.kind === "preparing" ? (
               <PreparingCard
                 order={item.order}
                 label={orderLabel(item.order)}
                 now={now}
+              />
+            ) : (
+              <UnsentCard
+                order={item.order}
+                label={orderLabel(item.order)}
+                now={now}
+                busy={discardingId === item.order.id}
+                onDiscard={() => handleDiscard(item.order)}
               />
             )
           }
@@ -408,17 +509,70 @@ function PreparingCard({
   );
 }
 
+/**
+ * An order the kitchen was never given: someone started it and walked away.
+ *
+ * Not dimmed like `PreparingCard`, because this one is the cashier's to act on
+ * — dimming it would say "wait", and waiting is exactly what these did for
+ * days. The amount is stated in muted type instead: it is a running tally on
+ * an order nobody committed, not money the restaurant is owed.
+ */
+function UnsentCard({
+  order,
+  label,
+  now,
+  busy,
+  onDiscard,
+}: {
+  order: Order & { id: string };
+  label: string;
+  now: number;
+  busy: boolean;
+  onDiscard: () => void;
+}) {
+  const createdMs = order.createdAt?.toMillis() ?? null;
+  return (
+    <View style={styles.card}>
+      <View style={styles.cardTop}>
+        <Text style={styles.cardTitleText}>{label}</Text>
+        <View style={[styles.pill, { backgroundColor: colors.surfaceMuted }]}>
+          <Text style={[styles.pillText, { color: colors.textMuted }]}>
+            Not sent
+          </Text>
+        </View>
+      </View>
+      <View style={styles.cardBottom}>
+        <Text style={styles.cardTotalMuted}>{formatMoney(order.subtotal)}</Text>
+        <View style={styles.unsentActions}>
+          {createdMs !== null && (
+            <Text style={styles.cardTime}>{timeAgo(createdMs, now)}</Text>
+          )}
+          <Pressable
+            style={({ pressed }) => [
+              styles.discardBtn,
+              pressed && styles.cardPressed,
+            ]}
+            onPress={onDiscard}
+            disabled={busy}
+            hitSlop={space.s2}
+            accessibilityRole="button"
+            accessibilityLabel={`Discard ${label} order`}
+          >
+            {busy ? (
+              <ActivityIndicator color={colors.danger} size="small" />
+            ) : (
+              <Text style={styles.discardBtnText}>Discard</Text>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
 
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.s3,
-    paddingHorizontal: space.s4,
-    paddingTop: space.s4,
-    paddingBottom: space.s3,
-  },
   avatar: {
     width: 44,
     height: 44,
@@ -428,9 +582,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   avatarText: { fontSize: 18, fontWeight: "700", color: colors.textInverse },
-  headerText: { flex: 1 },
-  title: { fontSize: 24, fontWeight: "700", color: colors.text },
-  subtitle: { fontSize: 14, color: colors.textMuted, marginTop: 2 },
 
   list: { paddingHorizontal: space.s4 },
   listReadingWidth: { width: "100%", maxWidth: 760, alignSelf: "center" },
@@ -491,6 +642,27 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   pillText: { fontSize: 11, fontWeight: "700" },
+
+  // Muted, and paired with the timestamp + Discard on the other side, so the
+  // row reads as "this is going nowhere" rather than as takings.
+  cardTotalMuted: { fontSize: 18, fontWeight: "700", color: colors.textMuted },
+  unsentActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s3,
+  },
+  // Outlined, not filled: the filled pill on this screen means "Bill →", the
+  // action the cashier is here for. A destructive one must never wear it.
+  discardBtn: {
+    paddingHorizontal: space.s3,
+    paddingVertical: space.s2,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.danger,
+    minWidth: 78,
+    alignItems: "center",
+  },
+  discardBtnText: { fontSize: 13, fontWeight: "700", color: colors.danger },
 
   readyBtn: {
     backgroundColor: colors.primary,

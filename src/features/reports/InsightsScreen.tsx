@@ -25,6 +25,7 @@ import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { BrandHeader } from "@/components/BrandHeader";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { formatMoney } from "@/lib/money";
 import { formatDayKeyFull, formatDayKeyShort } from "@/lib/date";
 import { feel } from "@/lib/feedback";
@@ -228,16 +229,11 @@ export function InsightsScreen() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <BrandHeader />
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Insights</Text>
-          <Text style={styles.subtitle}>
-            Analyze your restaurant's performance.
-          </Text>
-        </View>
-        <ProfileButton />
-      </View>
+      <ScreenHeader
+        title="Insights"
+        subtitle="Analyze your restaurant's performance."
+        right={<ProfileButton />}
+      />
 
       {/* Analytics | Reports segmented control */}
       <View style={styles.segment}>
@@ -762,30 +758,6 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: colors.bg,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: space.s3,
-    paddingHorizontal: space.s4,
-    paddingTop: space.s3,
-    // The title block and the controls under it were one crowded run of text.
-    // The gap is what says the heading names the page rather than labelling
-    // the segmented control immediately below it.
-    paddingBottom: space.s4,
-  },
-  headerText: {
-    flex: 1,
-  },
-  title: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: colors.text,
-  },
-  subtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: space.s1,
   },
   pressed: {
     opacity: 0.7,

@@ -75,7 +75,7 @@ const NOT_LINKED_MESSAGE =
   "restaurant's join code, or contact support.";
 
 const TRIAL_ENDED_MESSAGE =
-  "Your free trial has ended. Thanks for trying Brew Brothers — get in touch to " +
+  "Your free trial has ended. Thanks for trying Smart Serve — get in touch to " +
   "activate your restaurant and keep everything you've set up.";
 
 /** setTimeout stores its delay in a signed 32-bit int; anything larger

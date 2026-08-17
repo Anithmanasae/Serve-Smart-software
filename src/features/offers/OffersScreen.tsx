@@ -24,6 +24,7 @@ import { Feather } from "@expo/vector-icons";
 import { isOfferLive } from "@/lib/offers";
 import { feel, feelToggle } from "@/lib/feedback";
 import { PressableScale } from "@/components/PressableScale";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import { useMenuCategories, useMenuItems } from "@/features/menu/useMenuData";
 import { deleteOffer, setOfferEnabled } from "./offersApi";
@@ -155,13 +156,13 @@ export function OffersScreen() {
         showsVerticalScrollIndicator={false}
         ItemSeparatorComponent={() => <View style={{ height: space.s3 }} />}
         ListHeaderComponent={
-          <View style={styles.header}>
-            <Text style={styles.title}>Offers & Discounts</Text>
-            <Text style={styles.subtitle}>
-              Set up a deal once and it prices itself onto every order —
-              automatically, on the days and hours you choose.
-            </Text>
-
+          // `flush`: this header is the list's own header, already inside the
+          // list's horizontal padding, so it must not add its own.
+          <ScreenHeader
+            flush
+            title="Offers & Discounts"
+            subtitle="Set up a deal once and it prices itself onto every order — automatically, on the days and hours you choose."
+          >
             {total > 0 ? (
               <View style={styles.statRow}>
                 <View style={[styles.stat, styles.statLive]}>
@@ -174,7 +175,7 @@ export function OffersScreen() {
                 </View>
               </View>
             ) : null}
-          </View>
+          </ScreenHeader>
         }
         renderItem={({ item }) => (
           <OfferCard
@@ -269,23 +270,6 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: space.s4,
-  },
-  header: {
-    paddingTop: space.s2,
-    paddingBottom: space.s4,
-    gap: space.s2,
-  },
-  title: {
-    fontFamily: fonts.extrabold,
-    fontSize: 28,
-    color: colors.text,
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.textMuted,
   },
   statRow: {
     flexDirection: "row",

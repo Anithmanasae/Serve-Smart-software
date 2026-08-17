@@ -1,5 +1,5 @@
 /**
- * The app's brand bar — the Brew Brothers mark and name, in one place.
+ * The app's brand bar — the Smart Serve mark and name, in one place.
  *
  * It exists because the mark and the name were being laid out per screen, and
  * two screens had drifted apart by 2px of mark and 2pt of type. A logo that is
@@ -7,9 +7,9 @@
  * as an identity, so the numbers live here now and every screen gets the same
  * ones.
  *
- * Sits ABOVE a screen's own title row rather than replacing it: "Brew
- * Brothers" is who the app is, "Bills" is where you are, and collapsing the
- * two would cost the screen its name.
+ * Sits ABOVE a screen's own title row rather than replacing it: "Smart Serve"
+ * is who the app is, "Bills" is where you are, and collapsing the two would
+ * cost the screen its name.
  */
 import type { ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
@@ -29,9 +29,9 @@ export function BrandHeader({
     <View style={styles.bar}>
       <View style={styles.row}>
         {left}
-        <BrandMark size={34} />
+        <BrandMark size={30} />
         <Text style={styles.name} allowFontScaling={false}>
-          Brew Brothers
+          Smart Serve
         </Text>
       </View>
       {right}
@@ -51,9 +51,9 @@ const styles = StyleSheet.create({
   name: {
     fontFamily: fonts.extrabold,
     fontSize: 20,
-    // Near-black, not the app's navy: the mark beside it is gold on black,
-    // and navy against that reads as two brands sharing a row.
-    color: colors.text,
+    // Navy, matching the mark: the cloche takes its colour from the theme, so
+    // mark and wordmark are one lockup rather than two things sharing a row.
+    color: colors.primary,
     letterSpacing: 0.3,
   },
 });

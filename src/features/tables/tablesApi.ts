@@ -207,16 +207,86 @@ export async function shiftTable(
  * Close a table back to "available" once its order is settled. Clears the
  * current order pointer and any merge link. The order itself is closed
  * elsewhere (cashier module); here we just free the floor slot.
+ *
+ * `openOrderId` is the live order the caller can see on this table, or null.
+ * It is REFUSED rather than freed, because freeing a table whose order is
+ * still open strands that order: the table reads "Free" while the order stays
+ * open underneath, and every later visit appends to that ghost instead of
+ * starting a new one — `writeOrderItems` never touches a table, so the slot
+ * can no longer go back to occupied by itself. This is not hypothetical; it is
+ * what put five tables in that state. The way out of an unwanted order is
+ * Discard (never sent to kitchen) or a void, both of which close the order.
+ *
+ * The check is a transaction read of the order itself, not of the table's
+ * `currentOrderId` — that pointer is exactly what a previous bad close nulled,
+ * so trusting it would wave through the case this exists to catch.
  */
-export async function closeTable(tableId: string): Promise<void> {
-  const batch = writeBatch(db);
-  batch.update(paths.table(tableId), {
-    status: "available",
-    currentOrderId: null,
-    mergedInto: null,
-    updatedAt: serverTimestamp(),
+export async function closeTable(
+  tableId: string,
+  openOrderId: string | null
+): Promise<void> {
+  await runTransaction(db, async (tx) => {
+    if (openOrderId) {
+      const orderSnap = await tx.get(paths.order(openOrderId));
+      if (orderSnap.exists() && orderSnap.data().status === "open") {
+        throw new Error(
+          "This table still has an open order. Bill it, or discard it from the Bills screen, then close the table."
+        );
+      }
+    }
+    tx.update(paths.table(tableId), {
+      status: "available",
+      currentOrderId: null,
+      mergedInto: null,
+      updatedAt: serverTimestamp(),
+    });
   });
-  await batch.commit();
+}
+
+/**
+ * Re-occupy a table that has a live order but reads as free.
+ *
+ * A table and its order can only be written apart by a bug or by an admin
+ * script, but once they are, nothing in the ordinary flow puts them back:
+ * `createOrderLocal` is what sets "occupied", and it only runs when a table has
+ * NO open order. So this repairs on sight — the order screen calls it when it
+ * finds a live order on an available table. Cheap (one write, only when the two
+ * actually disagree) and it heals old damage as the floor gets used, rather
+ * than needing every stuck table cleared by hand.
+ *
+ * Deliberately does not touch a "billed" table: that one is not free, it is
+ * further along, and the cashier owns that transition.
+ *
+ * Both of those conditions are re-checked HERE, inside a transaction, rather
+ * than trusted from the caller's snapshots. The caller (the order screen) sees
+ * the table doc and the order doc arrive as two independent snapshots, so a
+ * `discardOrder` — which frees the table and cancels the order in ONE
+ * transaction — can reach it as "table is free" a beat before "order is
+ * cancelled". Repairing on that half-seen state would re-occupy the table
+ * against a cancelled order: precisely the stuck state this function exists to
+ * clear, and one `createOrderLocal` can no longer fix because the table would
+ * no longer read as available. A no-op is the right answer when the disagreement
+ * has already resolved itself.
+ */
+export async function reoccupyTable(
+  tableId: string,
+  orderId: string
+): Promise<void> {
+  await runTransaction(db, async (tx) => {
+    const orderSnap = await tx.get(paths.order(orderId));
+    if (!orderSnap.exists()) return;
+    if ((orderSnap.data() as Order).status !== "open") return;
+
+    const tableSnap = await tx.get(paths.table(tableId));
+    if (!tableSnap.exists()) return;
+    if ((tableSnap.data() as Table).status !== "available") return;
+
+    tx.update(paths.table(tableId), {
+      status: "occupied",
+      currentOrderId: orderId,
+      updatedAt: serverTimestamp(),
+    });
+  });
 }
 
 /** Default seats for a table the cashier adds from the count setter. */

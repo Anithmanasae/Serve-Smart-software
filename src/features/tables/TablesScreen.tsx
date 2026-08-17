@@ -28,6 +28,7 @@ import { gridColumns, useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { colors, fonts, radius, space } from "@/theme/theme";
 import { BrandHeader } from "@/components/BrandHeader";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import type { Kot, Order, OrderItem, Table, TableStatus } from "@/types/models";
 import { ProfileButton } from "@/components/ProfileButton";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -197,24 +198,29 @@ export function TablesScreen() {
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <BrandHeader />
-      <View style={styles.header}>
-        <View style={styles.headerText}>
-          <Text style={styles.title}>Tables</Text>
-          <Text style={styles.subtitle}>Manage your floor</Text>
-        </View>
-        {canTakeaway && (
-          <Pressable
-            style={({ pressed }) => [styles.takeawayBtn, pressed && styles.pressed]}
-            onPress={() => {
-              feel.press(); // leaving for another screen
-              router.push("/order");
-            }}
-          >
-            <Text style={styles.takeawayBtnText}>🥡 Takeaway</Text>
-          </Pressable>
-        )}
-        <ProfileButton />
-      </View>
+      <ScreenHeader
+        title="Tables"
+        subtitle="Manage your floor"
+        right={
+          <>
+            {canTakeaway && (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.takeawayBtn,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => {
+                  feel.press(); // leaving for another screen
+                  router.push("/order");
+                }}
+              >
+                <Text style={styles.takeawayBtnText}>🥡 Takeaway</Text>
+              </Pressable>
+            )}
+            <ProfileButton />
+          </>
+        }
+      />
 
       <View style={styles.filterRow}>
         {FILTERS.map((f) => {
@@ -300,7 +306,10 @@ export function TablesScreen() {
                 onShift={() => setSheet("shift")}
                 onSplit={() => setSheet("split")}
                 onClose={() =>
-                  run(() => closeTable(selected.id), closeSheet)
+                  run(
+                    () => closeTable(selected.id, selectedOrder?.id ?? null),
+                    closeSheet
+                  )
                 }
                 onDismiss={closeSheet}
               />
@@ -677,16 +686,6 @@ function SplitSheet({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.floor },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: space.s3,
-    paddingHorizontal: space.s4,
-    paddingTop: space.s4,
-    paddingBottom: space.s2,
-  },
-  headerText: { flex: 1 },
   takeawayBtn: {
     backgroundColor: colors.primary,
     borderRadius: radius.pill,
@@ -697,18 +696,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.semibold,
     fontSize: 14,
     color: colors.textInverse,
-  },
-  title: {
-    fontFamily: fonts.extrabold,
-    fontSize: 34,
-    color: colors.text,
-    letterSpacing: -0.5,
-  },
-  subtitle: {
-    fontFamily: fonts.regular,
-    fontSize: 15,
-    color: colors.textMuted,
-    marginTop: space.s1,
   },
 
   filterRow: {

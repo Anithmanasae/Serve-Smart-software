@@ -58,6 +58,57 @@ export function useOpenOrderForTable(tableId: string | null) {
   };
 }
 
+/**
+ * The takeaway order this user walked away from, if there is one.
+ *
+ * A dine-in order is found again through its table; a takeaway order has no
+ * table, so its id lives only in Order screen state. Anything that tears that
+ * screen down — the app being killed mid-bill, a tab switch, a reload — used
+ * to leave the order (and any bill already generated for it) open in Firestore
+ * with nothing on screen pointing at it. This is how the counter finds it.
+ *
+ * `billed` is in the filter deliberately: `generateBill` moves the order out
+ * of `open`, so the half-settled counter order — the one actually worth
+ * resuming — is the one a `status == "open"` query would miss. `closed` and
+ * `cancelled` are finished business and stay out.
+ *
+ * Scoped to the caller's OWN orders: two tablets taking takeaway at the same
+ * time must never adopt each other's cart. Runs on the (tableId, status)
+ * index; `orderType` and `waiterId` are narrowed here rather than in the query
+ * so no new composite index is needed.
+ */
+export function useResumableTakeawayOrder(waiterId: string | null) {
+  const q = useMemo(
+    () =>
+      waiterId
+        ? query(
+            paths.orders(),
+            where("tableId", "==", null),
+            where("status", "in", ["open", "billed"])
+          )
+        : null,
+    [waiterId]
+  );
+  const state = useCollectionData<Order>(q);
+  const order = useMemo(() => {
+    const mine = state.data.filter(
+      (o) =>
+        o.orderType === "takeaway" &&
+        o.waiterId === waiterId &&
+        (o.items?.length ?? 0) > 0
+    );
+    // Newest first: if service left more than one behind, the live one at the
+    // counter is the last one started. A serverTimestamp still in flight has
+    // no millis yet, but such an order was minted by this very screen and is
+    // never the one being resumed.
+    mine.sort(
+      (a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0)
+    );
+    return mine[0] ?? null;
+  }, [state.data, waiterId]);
+  return { ...state, order };
+}
+
 /** Subscribe to a single order doc by id. */
 export function useOrder(orderId: string | null) {
   const ref = useMemo(

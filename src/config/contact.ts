@@ -61,7 +61,7 @@ export function activationRequestMessage(opts: {
   const restaurant = opts.restaurantName ?? "my restaurant";
   const email = opts.email ?? "(my signup email)";
   return (
-    `Hi! My Brew Brothers trial for "${restaurant}" has ended and I'd like to ` +
+    `Hi! My Smart Serve trial for "${restaurant}" has ended and I'd like to ` +
     `continue.\n\nMy signup email: ${email}`
   );
 }

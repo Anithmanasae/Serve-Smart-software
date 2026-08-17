@@ -9,7 +9,9 @@ import { TABS, TabBar, canSeeTab } from "@/components/TabBar";
  * Tabs show every module the user's role may access (admins see all); modules
  * outside the role are hidden via `href: null`. Screens reached *from* a tab
  * are not here: they are stack siblings of this navigator, one level up in
- * `app/(app)/_layout.tsx`, so they push and hide the bar.
+ * `app/(app)/_layout.tsx`, so they push and hide the bar. The one exception is
+ * a table's order, which pushes *within* the Order tab and so keeps the bar —
+ * see `order/_layout.tsx`.
  *
  * The bar itself is drawn by `<TabBar />` — a Material 3 navigation bar on a
  * phone, a navigation rail on a tablet. Its contents come from `TABS`, which
@@ -58,6 +60,20 @@ export default function TabsLayout() {
           }}
         />
       ))}
+      {/* A table's dine-in order: a tab, but a hidden one, so the bar stays put
+          when a waiter opens a table. It was briefly a stack nested in the
+          Order tab, which kept the bar too but made the trip there TWO moves —
+          the navigator cross-faded to the takeaway screen sitting at the
+          bottom of that stack before the table's order slid over it, and the
+          takeaway screen visibly flashed past on the way. As a sibling tab it
+          is one cross-fade to the screen actually asked for.
+
+          `TabBar` draws from `TABS`, which this is deliberately not in, so it
+          gets no button of its own; it lights the Order tab instead, by first
+          path segment. Its "‹ Back" goes to Tables by name — see
+          `OrderScreen` — because there is no stack here to pop. */}
+      <Tabs.Screen name="order/[tableId]" options={{ href: null }} />
+
       {/* No Account tab. It is a stack screen reached from the profile button
           in each screen's header — see `src/components/ProfileButton.tsx`.
           The bar is for the modules a shift moves between; settings are not

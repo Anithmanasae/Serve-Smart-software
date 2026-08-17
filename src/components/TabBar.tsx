@@ -75,6 +75,11 @@ const INDICATOR_W_RAIL = 56;
 /** M3 navigation rail is 80dp wide. */
 const RAIL_W = 80;
 
+/** `order/[tableId]` → `order`. A route's module is its first segment. */
+function firstSegment(routeName: string): string {
+  return routeName.split("/")[0];
+}
+
 export function TabBar({ state, navigation, insets }: BottomTabBarProps) {
   const { profile } = useAuth();
   const { isTablet } = useResponsive();
@@ -103,7 +108,13 @@ export function TabBar({ state, navigation, insets }: BottomTabBarProps) {
           key={route.key}
           tab={tab}
           rail={rail}
-          focused={state.routes[state.index]?.key === route.key}
+          // Matched on the first path segment, not the whole route name, so a
+          // module's secondary screens keep their tab lit: `order/[tableId]`
+          // (a table's dine-in order) is the Order tab, same as `order/index`.
+          focused={
+            firstSegment(state.routes[state.index]?.name ?? "") ===
+            firstSegment(tab.name)
+          }
           onPress={() => {
             // Emitted so anything listening for `tabPress` still hears it, and
             // so a screen may preventDefault. The feel is NOT played here —

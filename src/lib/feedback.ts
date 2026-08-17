@@ -46,9 +46,24 @@ import * as Haptics from "expo-haptics";
 const { AndroidHaptics: A, ImpactFeedbackStyle: Impact, NotificationFeedbackType: Notify } =
   Haptics;
 
-// Classic-architecture Android needs the explicit opt-in; no-op elsewhere.
+/**
+ * Classic-architecture Android needs an explicit opt-in before
+ * `LayoutAnimation` does anything. Fabric does not — layout animations are on
+ * already — and calling the opt-in there logs
+ * "setLayoutAnimationEnabledExperimental is currently a no-op in the New
+ * Architecture", which LogBox then parks over the bottom of whatever screen is
+ * open after a reload.
+ *
+ * So the check cannot be "does this function exist?": it exists under Fabric
+ * too, it just warns and does nothing. `nativeFabricUIManager` is the global
+ * the renderer installs and is the supported way to tell the two apart.
+ */
+const isFabric = (globalThis as { nativeFabricUIManager?: unknown })
+  .nativeFabricUIManager != null;
+
 if (
   Platform.OS === "android" &&
+  !isFabric &&
   UIManager.setLayoutAnimationEnabledExperimental
 ) {
   UIManager.setLayoutAnimationEnabledExperimental(true);

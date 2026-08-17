@@ -4,6 +4,13 @@
  * these helpers fold a flat (createdAt-ascending) kot list into per-table
  * groups where `tickets[0]` is the first round and the rest are additional
  * rounds fired later.
+ *
+ * Folding rather than listing each ticket is what keeps a table's food
+ * together: the kitchen cooks and sends for a TABLE, so a second round has to
+ * arrive next to the first one — not somewhere further down a queue where it
+ * can be plated and run out on its own. The card draws those later rounds
+ * highlighted, which is the whole reason there is no separate "additional"
+ * board any more.
  */
 import type { Kot } from "@/types/models";
 
@@ -37,19 +44,6 @@ export function groupActiveKots(kots: LiveKot[]): TableGroup[] {
   }
   // Map preserves insertion order = oldest first ticket first (FIFO).
   return [...map.values()];
-}
-
-/**
- * Completed tab: one card per completed ticket, newest first. Tickets are NOT
- * merged per table here — two seatings at the same table stay separate.
- */
-export function completedGroups(kots: LiveKot[]): TableGroup[] {
-  const out: TableGroup[] = [];
-  for (let i = kots.length - 1; i >= 0; i--) {
-    const k = kots[i];
-    out.push({ key: k.id, tableLabel: k.tableLabel, tickets: [k], completed: true });
-  }
-  return out;
 }
 
 /** A table with 2+ active tickets has an "additional" round in play. */

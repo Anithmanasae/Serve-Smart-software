@@ -173,7 +173,7 @@ export default function Signup() {
                 style={styles.input}
                 value={restaurantName}
                 onChangeText={setRestaurantName}
-                placeholder="e.g. Brew Brothers Cafe"
+                placeholder="e.g. Smart Serve Restaurant"
                 placeholderTextColor={colors.textMuted}
                 maxLength={60}
               />

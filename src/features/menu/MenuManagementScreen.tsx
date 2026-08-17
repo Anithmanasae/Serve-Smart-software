@@ -22,6 +22,7 @@ import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { BrandHeader } from "@/components/BrandHeader";
+import { ScreenHeader } from "@/components/ScreenHeader";
 import { deleteMenuItem, setMenuItemEnabled } from "./menuApi";
 import { useMenuCategories, useMenuItems } from "./useMenuData";
 import type { MenuCategoryDoc, MenuItemDoc } from "./useMenuData";
@@ -159,26 +160,31 @@ export function MenuManagementScreen() {
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <BrandHeader />
       {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerText}>
-          <Text style={styles.headerTitle}>Menu Management</Text>
-          <Text style={styles.headerSubtitle}>
-            {itemsState.loading
-              ? "Manage and organize your offerings."
-              : `${itemsState.data.length} of ${MAX_MENU_ITEMS} items`}
-          </Text>
-        </View>
-        <Pressable
-          style={({ pressed }) => [styles.manageBtn, pressed && styles.pressed]}
-          onPress={() => {
-            feel.press();
-            setCategoryManagerVisible(true);
-          }}
-        >
-          <Text style={styles.manageBtnText}>Categories</Text>
-        </Pressable>
-        <ProfileButton />
-      </View>
+      <ScreenHeader
+        title="Menu Management"
+        subtitle={
+          itemsState.loading
+            ? "Manage and organize your offerings."
+            : `${itemsState.data.length} of ${MAX_MENU_ITEMS} items`
+        }
+        right={
+          <>
+            <Pressable
+              style={({ pressed }) => [
+                styles.manageBtn,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => {
+                feel.press();
+                setCategoryManagerVisible(true);
+              }}
+            >
+              <Text style={styles.manageBtnText}>Categories</Text>
+            </Pressable>
+            <ProfileButton />
+          </>
+        }
+      />
 
       {/* Search */}
       <View style={styles.searchWrap}>
@@ -369,28 +375,6 @@ const styles = StyleSheet.create({
   fabPressed: {
     opacity: 0.7,
     transform: [{ scale: 0.98 }],
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    gap: space.s2,
-    paddingHorizontal: space.s4,
-    paddingTop: space.s3,
-    paddingBottom: space.s2,
-  },
-  headerText: {
-    flex: 1,
-  },
-  headerTitle: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: colors.text,
-  },
-  headerSubtitle: {
-    fontSize: 13,
-    color: colors.textMuted,
-    marginTop: 2,
   },
   manageBtn: {
     paddingHorizontal: space.s3,

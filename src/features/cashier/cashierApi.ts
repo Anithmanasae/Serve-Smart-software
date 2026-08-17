@@ -99,6 +99,93 @@ async function assertKitchenDone(order: Order): Promise<void> {
   }
 }
 
+/**
+ * Is the kitchen holding any of this order RIGHT NOW?
+ *
+ * The one question that decides whether an order can simply be thrown away.
+ * If no live line carries a `kotId`, nothing is on the pass and no money has
+ * been counted — the order is a note somebody stopped writing.
+ *
+ * Voided lines are excluded deliberately, and that is the whole difference
+ * from `wasEverSentToKitchen` below. An order whose ticketed lines were ALL
+ * voided is finished business as far as the kitchen is concerned: the void
+ * already dealt with the food. If this counted those lines, such an order
+ * could be neither billed (`isKitchenDone` sees no live sent line) nor
+ * discarded, and would sit under "Preparing…" forever — the exact trap
+ * `discardOrder` exists to open a way out of.
+ */
+export function hasLiveKitchenLines(order: Order): boolean {
+  return order.items.some((i) => !i.voided && i.kotId !== null);
+}
+
+/**
+ * Did a ticket for this order EVER reach the kitchen, voided since or not?
+ *
+ * Not a guard — a fact, for anything that describes the order to a human. The
+ * discard confirm uses it so it never tells a cashier "nothing was ever sent
+ * to the kitchen" about an order somebody actually cooked and then voided.
+ */
+export function wasEverSentToKitchen(order: Order): boolean {
+  return order.items.some((i) => i.kotId !== null);
+}
+
+/**
+ * Throw away an order nothing ever came of — the takeaway somebody started at
+ * the counter and walked away from, the table that changed its mind before the
+ * KOT went in.
+ *
+ * These used to be permanent. An order with unsent lines is not kitchen-done,
+ * so the Bills screen filed it under "Preparing…" where the card is
+ * deliberately untappable ("food first, pay after") — and since nothing else
+ * in the app could touch it either, it stayed on that list forever and the
+ * list only grew. This is the way out, and the ONLY one the app has.
+ *
+ * `cancelled`, not deleted: it is the same word `voidBill` writes for an order
+ * that ended without money changing hands, every live query already filters it
+ * out, and the record survives for anyone asking what happened.
+ *
+ * Refuses anything that isn't genuinely abandoned. A billed order belongs to
+ * the settle/void path (which has the day's takings to correct), and an order
+ * the kitchen is actually cooking must not vanish from under the pass — that
+ * one is `Preparing…` for the honest reason and will move to "Ready to bill"
+ * by itself.
+ */
+export async function discardOrder(orderId: string): Promise<void> {
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(paths.order(orderId));
+    if (!snap.exists()) throw new Error("This order no longer exists.");
+    const order = { ...snap.data(), id: orderId } as Order;
+
+    if (order.status !== "open") {
+      throw new Error(`This order is already ${order.status}.`);
+    }
+    if (order.billId) {
+      throw new Error(
+        "This order has a bill. Settle it, or cancel the bill from the bill screen."
+      );
+    }
+    if (hasLiveKitchenLines(order)) {
+      throw new Error(
+        "The kitchen has already been given part of this order. Void the items on the ticket first."
+      );
+    }
+
+    tx.update(paths.order(orderId), {
+      status: "cancelled",
+      updatedAt: serverTimestamp(),
+    });
+    // A dine-in order holds the floor slot; discarding it has to give the
+    // table back, exactly as settling would.
+    if (order.tableId) {
+      tx.update(paths.table(order.tableId), {
+        status: "available",
+        currentOrderId: null,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
+}
+
 /** counters/billNumber starts here, so the first printed bill is 000101. */
 const BILL_NUMBER_SEED = 100;
 

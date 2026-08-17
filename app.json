@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Brew Brothers",
+    "name": "Smart Serve",
     "slug": "sada-pos",
     "version": "0.1.0",
     "orientation": "default",
@@ -15,7 +15,7 @@
       "package": "com.sada.pos",
       "adaptiveIcon": {
         "foregroundImage": "./assets/brand/adaptive-icon.png",
-        "backgroundColor": "#0b0a08"
+        "backgroundColor": "#00336F"
       },
       "permissions": [
         "android.permission.BLUETOOTH_CONNECT",
@@ -34,7 +34,7 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Brew Brothers to access your photos to set menu item images."
+          "photosPermission": "Allow Smart Serve to access your photos to set menu item images."
         }
       ],
       [
@@ -42,9 +42,10 @@
         {
           "image": "./assets/brand/logo.png",
           "resizeMode": "contain",
-          "backgroundColor": "#0b0a08"
+          "backgroundColor": "#00336F"
         }
-      ]
+      ],
+      "expo-audio"
     ],
     "extra": {
       "router": {

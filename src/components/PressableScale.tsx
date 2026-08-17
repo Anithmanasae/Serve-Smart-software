@@ -26,6 +26,13 @@ import { feel } from "@/lib/feedback";
 interface PressableScaleProps extends Omit<PressableProps, "style" | "children"> {
   /** Style applied to the animated inner view (the visible surface). */
   style?: StyleProp<ViewStyle>;
+  /**
+   * Style for the OUTER touchable, which is the box the parent's layout sees.
+   * Needed only when that box has to participate in a layout of its own —
+   * `flex: 1` to fill a grid cell, say. Scaling the visible surface must not
+   * change the space the control occupies, which is why the two are separate.
+   */
+  containerStyle?: StyleProp<ViewStyle>;
   /** Scale to spring to while pressed (default 0.9). */
   activeScale?: number;
   /** Feel played on touch-down; `false` to stay silent. Default `"tap"`. */
@@ -35,6 +42,7 @@ interface PressableScaleProps extends Omit<PressableProps, "style" | "children">
 
 export function PressableScale({
   style,
+  containerStyle,
   activeScale = 0.9,
   haptic = "tap",
   onPressIn,
@@ -56,6 +64,7 @@ export function PressableScale({
 
   return (
     <Pressable
+      style={containerStyle}
       onPressIn={(e) => {
         spring(activeScale);
         if (haptic) feel[haptic]();

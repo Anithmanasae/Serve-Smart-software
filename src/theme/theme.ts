@@ -151,6 +151,59 @@ export const fonts = {
   extrabold: "PlusJakartaSans_800ExtraBold",
 } as const;
 
+/**
+ * TYPE SCALE for the things that name a place in the app.
+ *
+ * These exist because every screen was rolling its own page heading and they
+ * had drifted to 34 / 28 / 24 / 22 across seven screens — and worse, four of
+ * them (Insights, Bills, Menu, Bill History) set only `fontWeight` with no
+ * `fontFamily`. React Native cannot synthesise a weight for a loaded custom
+ * font: `fontWeight: "800"` without a family silently falls back to the
+ * PLATFORM font, so those four headings were not merely a different size,
+ * they were a different typeface from the rest of the app.
+ *
+ * Hence the rule: a heading style here always names a `fonts.*` family, and
+ * never a bare `fontWeight`. The weight is baked into the family.
+ *
+ * `lineHeight` is explicit for the same reason a size is — Plus Jakarta's
+ * intrinsic metrics leave the extrabold cut's descenders clipped on some
+ * Android builds at these sizes, and an unset lineHeight makes a heading's
+ * box depend on the OS rather than on us.
+ *
+ * Negative tracking rises with size: at 28pt the default spacing reads loose
+ * and web-like, at 13pt tightening it would just hurt legibility.
+ */
+export const typography = {
+  /** The page heading. One per screen, directly under the brand bar. */
+  screenTitle: {
+    fontFamily: fonts.extrabold,
+    fontSize: 28,
+    lineHeight: 34,
+    letterSpacing: -0.4,
+    color: colors.text,
+  },
+  /**
+   * The same heading where the title has to share its row — the tablet bar
+   * and the phone's landscape bar, both of which put the search field beside
+   * it. A demotion in size only; the family and colour do not change, so it
+   * still reads as the same heading rather than as a different element.
+   */
+  screenTitleCompact: {
+    fontFamily: fonts.extrabold,
+    fontSize: 22,
+    lineHeight: 28,
+    letterSpacing: -0.3,
+    color: colors.text,
+  },
+  /** The line under a page heading — what this screen is for, or who is on it. */
+  screenSubtitle: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+  },
+} as const;
+
 /** Locale / currency. */
 export const currency = {
   symbol: "₹",

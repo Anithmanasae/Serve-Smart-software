@@ -33,8 +33,17 @@ import type {
   OrderType,
 } from "@/types/models";
 
-/** First minted KOT ticket is this + 1 (i.e. #4001). */
-const KOT_TICKET_SEED = 4000;
+/**
+ * First minted KOT ticket is this + 1 — so a new restaurant's first ticket is
+ * KOT 1.
+ *
+ * A KOT number is spoken across a kitchen ("where's 7?"), so it wants to be
+ * the shortest number that still identifies one ticket. It counts up forever
+ * rather than resetting nightly: a ticket outlives the day it was fired (the
+ * reprint, the bill it feeds, the audit), and two different tickets both
+ * called "KOT 1" would make that history ambiguous for the sake of a digit.
+ */
+const KOT_TICKET_SEED = 0;
 
 /** Σ price*qty over non-voided lines (paise) — reuses computeBill's subtotal.
  *  GROSS of offers, matching `Order.subtotal`'s definition. */
@@ -365,7 +374,7 @@ export function flushPendingWrites(): Promise<void> {
  *
  * Atomically (single runTransaction):
  *   1. Increment `counters/kotTicket` to mint a human ticket number
- *      (created at KOT_TICKET_SEED if missing, so the first ticket is #4001).
+ *      (created at KOT_TICKET_SEED if missing, so the first ticket is #1).
  *   2. Create a new `Kot` (status "new", denormalized tableLabel/orderType,
  *      pending lines mapped to KotItem, printedCount 0).
  *   3. Flip those order lines to `kotStatus: "sent"` with their new `kotId`.

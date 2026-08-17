@@ -128,7 +128,7 @@ export function TicketDetailSheet({
         try {
           const paperWidth = await getPaperWidth();
           const ticket = encodeKot({
-            profile: restaurant ?? { name: "Brew Brothers" },
+            profile: restaurant ?? { name: "Smart Serve" },
             kot,
             paperWidth,
           });

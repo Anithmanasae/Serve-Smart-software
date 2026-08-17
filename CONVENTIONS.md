@@ -95,10 +95,34 @@ the web build). Honor the layout/behavior/data; **translate the DOM/CSS details
 into RN primitives + theme tokens**. Keep the Smart Serve look: white cards on
 the gray canvas, green primary, rounded corners, mobile-first.
 
+## Page headings
+
+A screen does NOT write its own title style. Two components own the top of
+every screen and they stack:
+
+- `BrandHeader` — who the app is. Mark + wordmark, identical on every screen.
+- `ScreenHeader` — where you are. `title`, optional `subtitle`, and slots for
+  whatever that screen hangs off the row (`left`, `right`, `children`).
+
+```tsx
+<BrandHeader />
+<ScreenHeader title="Bills" subtitle={cashierName} right={<ProfileButton />} />
+```
+
+The sizes live in `typography` in `theme/theme.ts` — `screenTitle` (28) and
+`screenTitleCompact` (22, for bars that put the title beside a search field).
+
+**Never set `fontWeight` without a `fontFamily`.** RN cannot synthesise a
+weight for a loaded custom font, so `fontWeight: "800"` alone silently renders
+in the OS font instead of Plus Jakarta. It looks *almost* right, which is why
+four screens shipped that way. Weight comes from `fonts.*`, never from
+`fontWeight`.
+
 ## Definition of done for a screen
 
 - `npm run typecheck` (tsc) passes, zero errors.
 - All data is live (Firestore subscriptions via the ported hooks), not mocked.
 - Reuses the ported `*Api.ts` for every write (don't reimplement writes).
 - Uses theme tokens; no hardcoded colors/spacing; money via `formatMoney`.
+- Page title comes from `ScreenHeader`, not a local `styles.title`.
 - No web APIs. Matches the relevant `design/*.md`.
