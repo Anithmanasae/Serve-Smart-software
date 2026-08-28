@@ -1,12 +1,25 @@
-import { View, Text, Pressable, StyleSheet, Switch, ScrollView } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  Pressable,
+  StyleSheet,
+  Switch,
+  ScrollView,
+  type LayoutChangeEvent,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
 import { ReceiptDetailsCard } from "@/features/settings/ReceiptDetailsCard";
 import { PrinterSettingsCard } from "@/features/settings/PrinterSettingsCard";
 import { TrialStatusCard } from "@/features/settings/TrialStatusCard";
-import { useRestaurantProfile } from "@/features/settings/useRestaurantProfile";
+import {
+  markGstDecided,
+  useRestaurantProfile,
+} from "@/features/settings/useRestaurantProfile";
+import { useActivationContext } from "@/features/onboarding";
 import { feel, feelToggle } from "@/lib/feedback";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
@@ -16,10 +29,67 @@ import { colors, space, radius, shadow } from "@/theme/theme";
  * A **pushed** stack screen, not a tab: it is opened from the profile button
  * in each module's header and hides the tab bar while it is up. That means it
  * has to draw its own way back — there is no header and no bar underneath.
+ *
+ * ## `?focus=`
+ *
+ * Anything that sends an owner here for one specific job — a lesson, a nudge,
+ * a link from another screen — can name the section it means
+ * (`?focus=bill-header`, `?focus=printer`) and this screen scrolls to it and
+ * lights it up for a moment. Without that they land at the top of a long
+ * screen and have to hunt for "Receipt Details" past Billing, the menu rows
+ * and the join code, which is a link that technically goes somewhere and
+ * practically goes nowhere.
  */
+/** Sections that can be linked to directly. */
+type FocusTarget = "bill-header" | "printer";
+
 export default function AccountRoute() {
-  const { profile, signOut, role } = useAuth();
+  const { profile, signOut, role, config } = useAuth();
   const { gstEnabled, setGstEnabled } = useSettings();
+  const { focus } = useLocalSearchParams<{ focus?: string }>();
+  const activation = useActivationContext();
+
+  const scrollRef = useRef<ScrollView>(null);
+  // Measured as each section lays out, because the sections above them are
+  // conditional on role — there is no fixed offset to hard-code.
+  const offsets = useRef<Partial<Record<FocusTarget, number>>>({});
+  const [highlight, setHighlight] = useState<FocusTarget | null>(null);
+  const focusHandled = useRef(false);
+
+  // The TOPMOST element claiming a target wins. "Make bills look like yours"
+  // covers two cards — the GST switch and the receipt header — and scrolling
+  // to the second of them would put the first off screen above, answering
+  // half the row.
+  const onSectionLayout = useCallback(
+    (target: FocusTarget) => (e: LayoutChangeEvent) => {
+      const y = e.nativeEvent.layout.y;
+      const seen = offsets.current[target];
+      if (seen == null || y < seen) offsets.current[target] = y;
+    },
+    []
+  );
+
+  // One shot, after layout. The tint fades on its own: it is there to answer
+  // "which of these is the checklist talking about?", and a highlight that
+  // stayed would just be a second thing to dismiss.
+  useEffect(() => {
+    if (focusHandled.current) return;
+    if (focus !== "bill-header" && focus !== "printer") return;
+    focusHandled.current = true;
+    const target = focus;
+    const t = setTimeout(() => {
+      const y = offsets.current[target];
+      if (y != null) {
+        scrollRef.current?.scrollTo({ y: Math.max(0, y - space.s4), animated: true });
+      }
+      setHighlight(target);
+    }, 260);
+    const clear = setTimeout(() => setHighlight(null), 2600);
+    return () => {
+      clearTimeout(t);
+      clearTimeout(clear);
+    };
+  }, [focus]);
   // Join code lives on the restaurant root doc; only fetched for the roles
   // that may share it.
   const canShareJoinCode = role === "cashier" || role === "admin";
@@ -34,14 +104,19 @@ export default function AccountRoute() {
   const showOffers = role === "cashier" || role === "admin";
   // The cashier is the "2nd owner": approves signups, restricts/removes staff.
   const showStaff = role === "cashier" || role === "admin";
-  // Owner (cashier) + admin size the floor — how many tables the restaurant has.
-  const showTablesSetup = role === "cashier" || role === "admin";
+  // Owner (cashier) + admin size the floor — how many tables the restaurant
+  // has. A counter business said it has none, so there is no floor to size;
+  // the section's other row (re-running setup) is where they turn tables back
+  // on if that ever changes.
+  const isOwner = role === "cashier" || role === "admin";
+  const showTablesSetup = isOwner && config.tablesEnabled;
   // Receipt header + thermal printer are billing concerns: admin + cashier.
   const showReceiptSetup = role === "cashier" || role === "admin";
 
   return (
     <SafeAreaView style={styles.root} edges={["top"]}>
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
@@ -70,8 +145,70 @@ export default function AccountRoute() {
       {/* Renders nothing once the restaurant is activated (permanent). */}
       <TrialStatusCard />
 
-      {canToggleGst && (
+      {/* HOW TO USE THE APP — the walkthrough's permanent home.
+          The guided run fires once, straight after setup, and is never
+          forced on anyone again. But an owner who skipped it on day one, or
+          a second person picking up the cashier's tablet in week three, has
+          nowhere else to learn this app — so it lives here for good rather
+          than only existing during the days nobody was ready to watch it.
+
+          Owner-only, because the run bills a practice order and the roles
+          that cannot bill would be taught a screen they never see. */}
+      {isOwner && (
         <View style={styles.settingsCard}>
+          <Text style={styles.settingsTitle}>How to use Smart Serve</Text>
+          <Pressable
+            style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
+            onPress={() => router.push("/practice")}
+            onPressIn={feel.press}
+          >
+            <View style={styles.settingText}>
+              <Text style={styles.settingLabel}>Walk me through an order</Text>
+              <Text style={styles.settingHint}>
+                {config.kotEnabled
+                  ? "Table to kitchen to bill, step by step — nothing is saved"
+                  : "Cart to bill, step by step — nothing is saved"}
+              </Text>
+            </View>
+            <Text style={styles.settingChevron}>›</Text>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Somebody is locked out RIGHT NOW, waiting on a tap the owner does
+          not know exists. Nothing else in the app says so, which is why this
+          gets a card of its own rather than a line inside Staff. */}
+      {isOwner && (activation?.teamPending ?? 0) > 0 && (
+        <Pressable
+          style={({ pressed }) => [styles.pendingCard, pressed && styles.pressed]}
+          onPress={() => router.push("/staff")}
+          onPressIn={feel.press}
+        >
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{activation?.teamPending}</Text>
+          </View>
+          <View style={styles.settingText}>
+            <Text style={styles.settingLabel}>
+              {activation?.teamPending === 1
+                ? "Someone is waiting to join"
+                : "People are waiting to join"}
+            </Text>
+            <Text style={styles.settingHint}>
+              They can&apos;t use the app until you approve them
+            </Text>
+          </View>
+          <Text style={styles.settingChevron}>›</Text>
+        </Pressable>
+      )}
+
+      {canToggleGst && (
+        <View
+          style={[
+            styles.settingsCard,
+            highlight === "bill-header" && styles.settingsCardFocused,
+          ]}
+          onLayout={onSectionLayout("bill-header")}
+        >
           <Text style={styles.settingsTitle}>Billing</Text>
           <View style={styles.settingRow}>
             <View style={styles.settingText}>
@@ -87,11 +224,49 @@ export default function AccountRoute() {
               onValueChange={(v) => {
                 feelToggle(v);
                 setGstEnabled(v);
+                // Touching this switch IS the decision, wherever it happens.
+                // Without this the checklist would keep asking an owner who
+                // had already answered here rather than in the wizard — and
+                // an owner who deliberately left it ON would look, to the
+                // app, exactly like one who had never been asked.
+                void markGstDecided(v);
               }}
               trackColor={{ false: colors.borderStrong, true: colors.primary }}
               thumbColor={colors.surface}
             />
           </View>
+
+          {/* Only for a restaurant that has never been ASKED — one that
+              registered before the setup wizard put the question in, and has
+              therefore been charging 5% since day one on a default nobody
+              chose. The switch alone cannot settle it: stamping the decision
+              by flipping it would force a change on an owner whose answer
+              happens to be "yes", so the confirmation is its own tap. It
+              disappears the moment either one is used. */}
+          {restaurant && restaurant.gstDecidedAt == null && (
+            <View style={styles.confirmRow}>
+              <Text style={styles.confirmText}>
+                {gstEnabled
+                  ? "You have not set this yet — bills are adding 5% GST. Is that right?"
+                  : "You have not set this yet — bills are adding no GST. Is that right?"}
+              </Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => {
+                  feel.success();
+                  void markGstDecided(gstEnabled);
+                }}
+                accessibilityRole="button"
+              >
+                <Text style={styles.confirmBtnText}>
+                  Yes, that&apos;s right
+                </Text>
+              </Pressable>
+            </View>
+          )}
 
           <View style={styles.settingsDivider} />
 
@@ -113,8 +288,22 @@ export default function AccountRoute() {
 
       {showReceiptSetup && (
         <>
-          <ReceiptDetailsCard />
-          <PrinterSettingsCard />
+          {/* Shares the bill-header target with the GST switch above it: the
+              checklist row talks about both halves of what prints on a bill,
+              so pointing at one and not the other would answer half a
+              question. The wrapper is what carries the offset. */}
+          <View
+            style={[highlight === "bill-header" && styles.focusRing]}
+            onLayout={onSectionLayout("bill-header")}
+          >
+            <ReceiptDetailsCard />
+          </View>
+          <View
+            style={[highlight === "printer" && styles.focusRing]}
+            onLayout={onSectionLayout("printer")}
+          >
+            <PrinterSettingsCard />
+          </View>
         </>
       )}
 
@@ -166,10 +355,37 @@ export default function AccountRoute() {
           <Text style={styles.settingsTitle}>Staff Join Code</Text>
           <Text style={styles.joinCode}>{restaurant.joinCode}</Text>
           <Text style={styles.settingHint}>
-            Share this code with new waiters and kitchen staff — they enter it
-            on the signup screen to join {restaurant.name}. You approve them
-            from Staff Management.
+            Share this code with new waiters and kitchen staff. They install
+            the app, tap "Joining a team?" on the sign-in screen and enter it
+            to join {restaurant.name} — then you approve them from Staff
+            Management.
           </Text>
+        </View>
+      )}
+
+      {isOwner && (
+        <View style={styles.settingsCard}>
+          <Text style={styles.settingsTitle}>How you work</Text>
+          {/* Re-runs first-run setup. This is the ONLY way back to those
+              answers, and they decide whether half the app exists — a cafe
+              that adds tables next year, or turns the kitchen display on,
+              must not be stuck with what it said on day one. */}
+          <Pressable
+            style={({ pressed }) => [styles.settingRow, pressed && styles.pressed]}
+            onPress={() => router.push("/setup")}
+            onPressIn={feel.press}
+          >
+            <View style={styles.settingText}>
+              <Text style={styles.settingLabel}>Set up my app</Text>
+              <Text style={styles.settingHint}>
+                {config.kotEnabled
+                  ? "Kitchen tickets on"
+                  : "Quick billing — no kitchen tickets"}
+                {config.tablesEnabled ? " · tables on" : " · counter service"}
+              </Text>
+            </View>
+            <Text style={styles.settingChevron}>›</Text>
+          </Pressable>
         </View>
       )}
 
@@ -265,6 +481,47 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.s3,
   },
   roleText: { color: colors.primary, fontWeight: "700", fontSize: 12 },
+  // Same ring, for a target whose card draws its own background (the receipt
+  // and printer cards). Wrapping rather than restyling them keeps the
+  // highlight out of components that know nothing about the checklist.
+  focusRing: {
+    borderWidth: 2,
+    borderColor: colors.primary,
+    borderRadius: radius.lg,
+  },
+  pendingCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.s4,
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    padding: space.s5,
+    borderWidth: 1.5,
+    borderColor: colors.danger,
+    ...shadow.card,
+  },
+  badge: {
+    minWidth: 24,
+    height: 24,
+    paddingHorizontal: 7,
+    borderRadius: radius.pill,
+    backgroundColor: colors.danger,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badgeText: {
+    color: colors.textInverse,
+    fontWeight: "800",
+    fontSize: 12,
+  },
+
+  // The section the checklist sent them to. A ring, not a shadow: these cards
+  // already sit on their own elevation, and a second one reads as a rendering
+  // fault rather than as "this is the one".
+  settingsCardFocused: {
+    borderWidth: 2,
+    borderColor: colors.primary,
+  },
   settingsCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
@@ -288,6 +545,26 @@ const styles = StyleSheet.create({
   settingText: { flex: 1 },
   settingLabel: { fontSize: 16, fontWeight: "600", color: colors.text },
   settingHint: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  confirmRow: {
+    marginTop: space.s3,
+    padding: space.s3,
+    borderRadius: radius.lg,
+    backgroundColor: colors.primarySoft,
+    gap: space.s3,
+  },
+  confirmText: { fontSize: 13, color: colors.text, lineHeight: 18 },
+  confirmBtn: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.primary,
+    borderRadius: radius.pill,
+    paddingHorizontal: space.s4,
+    paddingVertical: space.s2,
+  },
+  confirmBtnText: {
+    color: colors.textInverse,
+    fontWeight: "700",
+    fontSize: 13,
+  },
   settingChevron: { fontSize: 24, color: colors.textMuted, fontWeight: "600" },
   joinCode: {
     fontSize: 32,

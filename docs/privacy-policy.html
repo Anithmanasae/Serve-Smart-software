@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Serve — Privacy Policy</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 5rem;
+    font: 16px/1.65 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #1a1c1e; background: #fff;
+  }
+  h1 { font-size: 1.9rem; margin-bottom: .25rem; color: #00336F; }
+  h2 { font-size: 1.15rem; margin-top: 2.25rem; color: #00336F; }
+  .meta { color: #5c6066; margin-top: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #d7dade; padding: .55rem .7rem; text-align: left; vertical-align: top; font-size: .95rem; }
+  th { background: #f3f5f8; }
+  code { background: #f3f5f8; padding: .1rem .3rem; border-radius: 3px; }
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e3e5e8; color: #5c6066; font-size: .9rem; }
+</style>
+</head>
+<body>
+
+<h1>Smart Serve — Privacy Policy</h1>
+<p class="meta">Last updated: 17 August 2026</p>
+
+<p>Smart Serve (“the app”, package <code>com.smartserve</code>) is a billing and
+point-of-sale app for restaurants, published by Anith Manasae (“we”, “us”). This
+policy explains what the app collects, why, and what control you have over it.</p>
+
+<p>Smart Serve is a tool for restaurant staff. Accounts are created by the
+restaurant’s owner and its employees. The app is not intended for children.</p>
+
+<h2>1. Information we collect</h2>
+
+<table>
+  <tr><th>What</th><th>Why we collect it</th></tr>
+  <tr>
+    <td><strong>Email address and password</strong> (password handled by Google Firebase Authentication; we never see or store it ourselves)</td>
+    <td>To create and sign in to your account, and to identify your workspace.</td>
+  </tr>
+  <tr>
+    <td><strong>Your name</strong> and role (owner, waiter, cashier, kitchen)</td>
+    <td>So the restaurant’s owner can approve staff and so orders show who took them.</td>
+  </tr>
+  <tr>
+    <td><strong>Account identifier</strong> assigned by Firebase</td>
+    <td>To link your login to your restaurant’s data and keep restaurants separated from each other.</td>
+  </tr>
+  <tr>
+    <td><strong>Restaurant details</strong> you enter — restaurant name and address</td>
+    <td>To print them on your bills and receipts.</td>
+  </tr>
+  <tr>
+    <td><strong>Business content you create</strong> — menu items, prices, offers, tables, orders, kitchen tickets, bills and sales summaries</td>
+    <td>This is the app’s core function: recording your restaurant’s orders and bills and reporting on them.</td>
+  </tr>
+  <tr>
+    <td><strong>Photos</strong> you choose to upload for menu items</td>
+    <td>To display a picture beside a dish. Only the images you pick are uploaded; the app has no access to the rest of your gallery.</td>
+  </tr>
+</table>
+
+<h2>2. Information we do NOT collect</h2>
+<ul>
+  <li><strong>No advertising.</strong> The app contains no ads and no advertising or analytics SDKs. We do not use advertising identifiers.</li>
+  <li><strong>No payment or card details.</strong> The app records how a bill was settled (for example “cash” or “UPI”) as a label only. It does not process payments and never collects card, bank or UPI credentials.</li>
+  <li><strong>No location tracking.</strong> On some Android versions the system requires the location permission before an app may scan for nearby Bluetooth printers. Smart Serve uses it only for that discovery step. Your location is never read, stored or transmitted.</li>
+  <li><strong>No microphone recording.</strong> The audio permission exists only so the app can play the kitchen’s new-order chime. Nothing is ever recorded.</li>
+  <li><strong>No data about your restaurant’s guests.</strong> Bills are not linked to any customer identity.</li>
+</ul>
+
+<h2>3. How your data is stored and secured</h2>
+<p>Data is stored in Google Firebase (Cloud Firestore, Firebase Authentication and
+Cloud Storage), operated by Google LLC. All traffic between the app and Firebase
+is encrypted in transit using HTTPS/TLS.</p>
+<p>Each restaurant’s data is isolated by server-side security rules: a signed-in
+user can only read or write data belonging to their own restaurant, and only
+what their role allows. Staff accounts must be approved by the restaurant’s
+owner before they can use the app.</p>
+
+<h2>4. Sharing</h2>
+<p>We do not sell your data and we do not share it with third parties for
+advertising or marketing. Data is processed only by Google Firebase acting as
+our hosting provider on our behalf. We may disclose data if required to do so by
+law.</p>
+
+<h2>5. Retention</h2>
+<p>Your account and your restaurant’s records are kept for as long as your
+account is active, so that your sales history and reports remain available to
+you. When you ask us to delete your account (see below) we delete it.</p>
+
+<h2>6. Deleting your account and your data</h2>
+<p>You can ask us to delete your Smart Serve account and the data associated with
+it at any time. Email <a href="mailto:anithyw@gmail.com">anithyw@gmail.com</a>
+from the address you signed up with, with the subject line
+<strong>“Delete my Smart Serve account”</strong>, and include your restaurant’s
+name.</p>
+<p>We will verify the request and action it within 30 days. On deletion we
+remove:</p>
+<ul>
+  <li>your login (email address and authentication record);</li>
+  <li>your staff profile (name, role, status);</li>
+  <li>if you are the restaurant’s owner and ask for the whole workspace to be
+      removed: the restaurant profile, its menu, uploaded menu photos, tables,
+      orders and bills.</li>
+</ul>
+<p>Note that if you are a member of staff, deleting your own account does not
+delete the restaurant’s order and bill records — those belong to the restaurant
+and its owner, who may need to keep them for accounting and tax purposes. A
+restaurant owner may be required by law to retain sales records for a period
+after deletion is requested; where that applies, the records are retained for
+that period only and are not used for any other purpose.</p>
+
+<h2>7. Children</h2>
+<p>Smart Serve is a business tool intended for people aged 18 and over. We do not
+knowingly collect data from children.</p>
+
+<h2>8. Changes to this policy</h2>
+<p>If we change this policy we will update the “last updated” date at the top of
+this page. Significant changes will be announced in the app.</p>
+
+<h2>9. Contact</h2>
+<p>Questions about this policy or about your data:
+<a href="mailto:anithyw@gmail.com">anithyw@gmail.com</a></p>
+
+<footer>Smart Serve — billing &amp; POS for restaurants.</footer>
+
+</body>
+</html>

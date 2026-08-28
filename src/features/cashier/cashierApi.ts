@@ -72,8 +72,25 @@ function offerTallyOf(order: Order): Map<string, { name: string; amount: number 
  * only has to EXIST (kitchen has the order) — it may still be preparing.
  * The cashier UI already hides unbillable orders; this guard catches anything
  * that slips past it (stale snapshot, other call sites).
+ *
+ * ALL OF IT IS MOOT where the restaurant has no kitchen ticket. Every clause
+ * below asks a question about a KOT, and in a quick-billing restaurant the
+ * honest answer to each is "there is never going to be one" — so the guard
+ * would refuse every bill the app is capable of raising. `kotEnabled` is
+ * passed in rather than read here because the caller already holds it live
+ * from the restaurant doc, and a guard that fetches its own configuration is
+ * a guard that can be wrong about it at a different moment than its caller.
+ *
+ * This is the ONLY thing standing between a quick-billing cart and a bill:
+ * `firestore.rules` has never required a KOT for a bill (it cannot read the
+ * kots collection from a bill write), so there is no server-side counterpart
+ * to relax.
  */
-async function assertKitchenDone(order: Order): Promise<void> {
+async function assertKitchenDone(
+  order: Order,
+  kotEnabled: boolean
+): Promise<void> {
+  if (!kotEnabled) return;
   const unsent = order.items.some(
     (i) => !i.voided && i.qty > 0 && i.kotStatus === "pending"
   );
@@ -205,11 +222,14 @@ export async function generateBill(
   order: Order,
   cashierUid: string,
   tableLabel: string,
-  gstEnabled = true
+  gstEnabled = true,
+  /** Does this restaurant route orders through the kitchen? Defaults to the
+   *  pre-wizard behaviour, so every existing call site keeps its guard. */
+  kotEnabled = true
 ): Promise<string> {
   if (order.billId) return order.billId;
 
-  await assertKitchenDone(order);
+  await assertKitchenDone(order, kotEnabled);
 
   const billRef = doc(paths.bills());
   const counterRef = paths.counter("billNumber");

@@ -6,7 +6,7 @@ operational tasks the owner asks for by name.
 
 ## How the trial works (read this before changing anything expiry-related)
 
-Every **new** restaurant is born a 2-day trial. There is no opt-in and no demo
+Every **new** restaurant is born a 3-day trial. There is no opt-in and no demo
 build — one APK serves prospects and paying customers alike.
 
 - `firestore.rules` requires `trialStartedAt == request.time` when the
@@ -51,6 +51,96 @@ bill does). That suite IS the enforcement, so run it after ANY change to
 The emulators need a JDK. There is none on PATH; Android Studio's bundled one
 works:
 `$env:JAVA_HOME = "C:\Program Files\Android\Android Studio\jbr"`
+
+## Subscriptions / Google Play Billing (read before touching billing)
+
+The trial above is the on-ramp; this is what happens at the end of it. Google
+Play sells a subscription, and a Cloud Function turns that into the SAME
+`expiresAt` field `activateTenant.js` has always written. **The model did not
+change — only who holds the pen.**
+
+| Piece | File | Job |
+|---|---|---|
+| what we sell | `lib/billing/config.ts` | product id + region, from env |
+| the native edge | `lib/billing/nativeIap.ts` | the ONLY file touching `expo-iap` |
+| the app's API | `lib/billing/index.ts` | buy / restore; what screens import |
+| the paywall | `features/billing/SubscribeScreen.tsx` | `/subscribe`, owner only |
+| "I just paid" | `functions/src/verifyPurchase.ts` | callable — unlock now |
+| everything after | `functions/src/onPlayNotification.ts` | RTDN — renewals, refunds |
+| the privileged write | `functions/src/entitlement.ts` | the only writer of `expiresAt` |
+
+The load-bearing decisions:
+
+- **Entitlement lands on the RESTAURANT, never on the buyer.** Play ties a
+  purchase to a Google account; a restaurant is three tablets signed into three
+  different ones. Writing it per-account would unlock the owner's phone and
+  leave the kitchen locked. This is also why the existing `expiresAt` field was
+  already the right sink and needed no redesign.
+- **Buying does not unlock anything.** The client obtains a purchase token and
+  sends it to the server; the server asks Google, then writes the date.
+  `AuthContext` is already watching the restaurant doc, so the unlock arrives
+  through the ordinary listener on every device at once. A client that could
+  unlock itself is a client that could lie.
+- **The functions never DELETE the trial fields.** Absent-both means PERMANENT.
+  That is a human decision about a customer and it stays in `activateTenant.js`
+  behind a typed `--confirm`. A refund is written as an `expiresAt` in the
+  past, never as a deletion — getting that backwards hands a refunded customer
+  the app forever.
+- **We ask Play what is true; we do not replay its state machine.** RTDN tells
+  us *something changed*; the function then calls `subscriptionsv2.get` and
+  writes whatever that says. Maintaining our own copy of
+  RENEWED/RECOVERED/RESTARTED is how a working restaurant gets locked out.
+- **A grace period stays OPEN.** `IN_GRACE_PERIOD` and `ON_HOLD` are a bank
+  declining a card, not a decision to leave, and Google is still retrying.
+  `CANCELED` also stays open to the end of the period already paid for.
+- **Reaching Google failing is never "not entitled".** `verifyPurchase` throws
+  `unavailable` on a lookup failure so the app retries. Taking a paying
+  restaurant offline because our function couldn't authenticate is the worst
+  possible reading of an outage.
+- **Acknowledge, or Google auto-refunds after 3 days.** Both the app and the
+  server acknowledge, and only after the entitlement is written.
+- **The Play base plan carries NO free-trial offer.** The app already runs its
+  own `trialStartedAt` trial and the rules enforce it. Two trial systems each
+  believing they own the question is one too many.
+- **`expo-iap` is a NATIVE module and is NOT INSTALLED YET.** Everything
+  degrades to "billing unavailable" and the expiry screen keeps its old
+  "Contact us" button, the same way `kitchenChime` and `printerService`
+  degrade. Nothing in this section is live until the module is installed, a
+  product id is set, and the functions are deployed.
+
+Turning it on (all four, in order):
+
+```bash
+# 1. Play Console: create the subscription, note the product id.
+# 2. The app:
+npx expo install expo-iap && npx expo prebuild --clean
+#    then reconcile the four `VERIFY:` call sites in lib/billing/nativeIap.ts
+#    against the installed version's API.
+# 3. Set the build-time id (EAS env or .env):
+#    EXPO_PUBLIC_PLAY_SUBSCRIPTION_ID=<product id>
+# 4. The server (needs the Blaze plan):
+firebase deploy --only functions
+```
+
+The Play identity is **`com.smartserve`** (`app.json` → `expo.android.package`),
+and it is PERMANENT from the first upload — Play keys an app on its package
+name forever. `PLAY_PACKAGE_NAME` in `functions/src/playApi.ts` defaults to the
+same string and must be changed with it; if they drift, Play answers the
+mismatch with a 404 and every purchase fails looking like "no such purchase"
+rather than like a config error.
+
+One package name serves every build profile, which is fine only while the other
+white-label (Akila's, see `scripts/buildTargets.js`) stays internal-only —
+sideloaded APKs sharing a name just overwrite each other. Publishing a second
+white-label to Play needs a per-target package name set up BEFORE either app's
+first upload. It cannot be fixed afterwards.
+
+`FUNCTIONS_REGION` in `lib/billing/config.ts` MUST match `setGlobalOptions` in
+`functions/src/index.ts`. Nothing checks them against each other, and a
+mismatch fails as a "not found" that looks nothing like a region problem.
+
+Billing cannot be tested in Expo Go or a debug build. It needs a signed AAB on
+an internal testing track with licensed testers added in Play Console.
 
 ## Activating a paying customer
 
@@ -320,6 +410,115 @@ The load-bearing decisions:
 
 Neither alert reaches a **backgrounded** app. Real push needs
 expo-notifications plus per-device tokens; both files carry the TODO.
+
+## Activation / the walkthrough (read before touching first-run anything)
+
+Everything between "the setup wizard finished" and "this owner can work the
+app" lives in `src/features/onboarding/`. It exists because the app cannot be
+sold by a person: the Play listing installs it, Google runs the free trial,
+and from there the product has to teach a restaurant owner its whole job on
+its own.
+
+**It used to be a checklist and a floating hint card. Both are gone.** A list
+of chores ("connect your printer") is an admin to-do list, not a lesson — it
+never answered the only question a new owner has, which is *what is this and
+can I work it?* The answer is a guided run through one whole order, and that
+is now the first thing they see.
+
+| Piece | File | Job |
+|---|---|---|
+| the world | `practice/practiceState.ts` | one restaurant, in memory, for 90 seconds |
+| what it teaches | `practice/practiceScript.ts` | the steps, resolved from the setup answers |
+| the run | `practice/PracticeRun.tsx` | the screen, `/practice` |
+| the instruction | `practice/PracticeCoach.tsx` | one card, one sentence, one thing to do |
+| the payoff | `practice/PracticeReceipt.tsx` | their bill, with their name on it |
+| has it happened? | `practice/practiceFlag.ts` | device-local, per restaurant |
+| the nudge ladder | `activation.ts` + `nudges.ts` | what we say to someone who has left |
+
+The load-bearing decisions:
+
+- **It is a SIMULATION, and it writes nothing.** No Firestore read beyond the
+  menu, no write, no rules involvement, no cleanup to get wrong — closing the
+  screen is what deletes it. The competing design (write a real order, ticket
+  and bill, then undo all three) is one dropped connection away from a phantom
+  ₹180 in a restaurant's opening figures, on the very day the owner is
+  deciding whether to trust the figures at all.
+- **But the screens are the REAL screens.** `TableCard`, `OrderMenuCard`,
+  `OrderLineRow`, `OrderCartPanel` and `TableTicketCard` are prop-driven and
+  hook-free, so the run mounts the same components the live app draws, fed
+  from a reducer instead of a subscription. `computeBill` and `applyOffers`
+  are pure, so the practice bill is arithmetically identical to a real one. A
+  bespoke mock would teach a screen that does not exist and would rot the
+  moment somebody restyled the real one.
+- **`TableTicketCard` takes an `onCompleteOverride`** — the one seam this
+  needed, because that card calls `completeGroup` (a Firestore write) itself.
+  Absent on every real board; the practice run passes it so COMPLETE cannot
+  write. If another card ever grows its own write, it needs the same seam.
+- **The script is filtered by the setup answers, not just reworded by them.**
+  Quick billing has no Send-KOT button and no kitchen tab AT ALL
+  (`OrderCartPanel` renders neither, `canSeeTab` drops the KDS); a counter
+  business has no floor. A step that pointed at a control this restaurant does
+  not have would have the owner conclude the app is broken rather than the
+  tutorial. Steps declare `requires: (c) => ...` — deliberately the same shape
+  as `canSeeTab`, because it is the same question about a different thing.
+  Four loops fall out: table→KOT→kitchen→Bills, table→Charge,
+  dish→KOT→kitchen→bill, dish→Charge.
+- **Where the money is taken MOVES, and that is not cosmetic.** `canBillHere`
+  is `(!isDineIn || !config.kotEnabled)`, so a dine-in table with a kitchen
+  ticket is paid for from the Bills tab and everything else is charged from
+  the cart already on screen. Telling a food-truck owner about a Bills tab
+  they never open teaches the app's shape instead of their job.
+- **It advances on the ACTION, never a Next button.** Every step asks the
+  reducer whether the thing is done, so the run cannot be walked through
+  without doing it and the caption cannot claim something that did not happen.
+  A step that completes ITSELF is the bug to watch for — there was a "go to
+  Bills" step whose arrival satisfied it, so it appeared and vanished in the
+  same frame having taught nothing.
+- **Everything but the target is dimmed; nothing is disabled.** The dimming
+  says where to look, it does not take the controls away. Skip is visible on
+  every step: an owner who has understood it by step two must be able to leave
+  at step two.
+- **The payoff is a RECEIPT, not a number.** The old celebration put "YOUR
+  FIRST BILL ₹120" on screen and asked the owner to be impressed by an order
+  they had invented thirty seconds earlier. A receipt carries their name,
+  their address, their tax treatment and their prices — it is the first moment
+  the software looks like it belongs to them. It also says plainly that
+  nothing was saved, because leaving someone to wonder whether ₹180 is now in
+  their figures is a small betrayal at the exact moment trust is being built.
+- **The run is offered ONCE, however it ends.** Somebody who skipped out has
+  said they do not want it; re-offering next launch is how a helpful screen
+  becomes a nuisance. It lives for ever in Account → How to use Smart Serve,
+  which is also where a second person picking up the tablet in week three
+  finds it. The flag is device-local *because a walkthrough is about the
+  human*, unlike `activationDoneAt` which is about the restaurant.
+- **`activation.ts` is now only the nudge ladder's data source.** It still
+  retires itself onto `activationDoneAt` at three settled bills or two trading
+  days, and still refuses to report anything until its probes answer — an
+  established restaurant carries no marker and no local flag, so for the beat
+  before `bills` resolves it looks exactly like a brand-new one, and acting in
+  that beat is how a year-old restaurant gets sent "take your first order".
+- **GST is a wizard question.** It defaulted ON and was reachable only by
+  scrolling Account, so an unregistered place charged 5% it cannot remit until
+  an accountant noticed. `gstDecidedAt` is separate from `gstEnabled` because
+  the latter is written `true` at registration and so cannot distinguish "they
+  chose this" from "nobody ever asked"; a restaurant predating the question
+  gets a one-tap confirm in Account rather than being made to flip the switch.
+  A device with no local answer adopts the restaurant's, so two tablets stop
+  billing the same table differently.
+- **Notifications are LOCAL, not push**, and permission is asked ONCE from the
+  end of the wizard. Android 13+ shows the dialog once and a denial is
+  permanent. Nothing depends on the answer.
+- **Nothing here mentions the trial or payment.** Google Play runs the free
+  trial and sends its own billing mail; a second voice dunning a customer we
+  have not convinced yet is worse than no voice at all.
+
+`components/EmptyState.tsx` is the other half of this: every list that used to
+answer emptiness with one grey line now says what the screen will hold and,
+where there is something to do, offers the one button that does it.
+`tone="calm"` is for a list that is empty because the shift is going well.
+
+STILL TO BUILD (agreed, not done): the orientation pass over the real tab bar,
+and the on-demand lessons for Menu, Bills & history, Team and Setup.
 
 ## Legacy: the shared demo sandbox
 

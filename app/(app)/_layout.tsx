@@ -1,4 +1,4 @@
-import { Redirect, Stack } from "expo-router";
+import { Redirect, Stack, usePathname } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
 import { BrandSplash } from "@/components/BrandSplash";
 
@@ -25,15 +25,50 @@ import { BrandSplash } from "@/components/BrandSplash";
  * `(tabs)/_layout.tsx`.
  *
  * The auth gate lives here rather than on the tabs so it covers those five as
- * well; `(tabs)/_layout.tsx` can therefore assume a profile exists.
+ * well; `(tabs)/_layout.tsx` can therefore assume a profile exists. The
+ * first-run setup gate rides with it, for the same reason: every screen below
+ * reads the config those answers produce.
  */
 export default function AppLayout() {
-  const { profile, gate, loading } = useAuth();
+  const { profile, gate, loading, config } = useAuth();
+  // Which route the router is currently on. Needed for the setup gate below —
+  // and read here, unconditionally, because every `return` under it is early.
+  const pathname = usePathname();
   if (loading) return <BrandSplash />;
   // Restricted/removed mid-shift → the live profile listener lands here and
   // kicks the device out to the gate screen instantly.
   if (gate) return <Redirect href="/pending" />;
   if (!profile) return <Redirect href="/login" />;
+  // A brand-new restaurant, before its owner has said what kind of place it
+  // is. Everything past this point — which tabs exist, whether there is a
+  // floor, whether an order becomes a kitchen ticket — depends on those
+  // answers, and the menu behind this screen has not been seeded yet, so
+  // there is nothing useful to let them into first.
+  //
+  // Owner only, and it survives being killed mid-wizard: the marker is
+  // cleared by the LAST write of `completeSetup`, so an interrupted setup
+  // lands right back here. Staff can never see it — they join a restaurant
+  // that is already configured, and re-shaping the workspace is not theirs
+  // to do.
+  //
+  // `pathname !== "/setup"` is LOAD-BEARING, and its absence was an infinite
+  // loop rather than a missing feature. `/setup` is `app/(app)/setup.tsx` — a
+  // screen INSIDE the very Stack this function returns. Redirecting to it
+  // *instead of* rendering that Stack means the router arrives at a route
+  // whose host navigator was never mounted, so nothing renders, so the layout
+  // re-runs, so it redirects again: React counts the repeats and throws
+  // "Maximum update depth exceeded". A redirect can only ever point OUT of the
+  // navigator it replaces — /pending and /login above are fine because both
+  // live outside this group. Once the router is already on /setup there is
+  // nothing left to redirect, and the Stack below is exactly what has to
+  // render for the wizard to appear.
+  if (
+    config.needsSetup &&
+    (profile.role === "cashier" || profile.role === "admin") &&
+    pathname !== "/setup"
+  ) {
+    return <Redirect href="/setup" />;
+  }
 
   return (
     <Stack

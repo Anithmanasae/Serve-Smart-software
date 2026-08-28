@@ -62,7 +62,18 @@ export function ScreenHeader({
             subtitle
           )}
         </View>
-        {right}
+        {/* The trailing cluster is nudged as ONE block when there is a
+            subtitle, so a pill button and the profile disc stay level with
+            each other while both sit on the title's optical centre rather
+            than on the centre of a two-line text block. The nudge used to
+            live inside ProfileButton, which aligned it against the title on
+            the screens where it stands alone and misaligned it against its
+            own neighbours on the screens where it does not. */}
+        {right ? (
+          <View style={[styles.right, subtitle != null && styles.rightNudge]}>
+            {right}
+          </View>
+        ) : null}
       </View>
       {children}
     </View>
@@ -86,5 +97,9 @@ const styles = StyleSheet.create({
     gap: space.s3,
   },
   text: { flex: 1 },
+  // Same `gap` as the row itself, so wrapping the slot changed no spacing
+  // between a screen's own trailing controls.
+  right: { flexDirection: "row", alignItems: "center", gap: space.s3 },
+  rightNudge: { marginTop: space.s1 },
   subtitleGap: { marginTop: 2 },
 });

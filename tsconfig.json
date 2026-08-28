@@ -18,6 +18,11 @@
     "**/*.tsx"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    // Cloud Functions are a separate Node package with their own tsconfig,
+    // dependencies and target. Type-check them with `npm --prefix functions
+    // run build`; pulling them in here only produces missing-module noise for
+    // packages the app deliberately does not depend on.
+    "functions"
   ]
 }

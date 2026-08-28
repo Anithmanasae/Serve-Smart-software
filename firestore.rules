@@ -18,7 +18,7 @@ rules_version = '2';
 //     the restaurant's real join code; the cashier approves them. Exactly one
 //     cashier can ever self-claim per restaurant via meta/bootstrap.
 //   - pending/denied/restricted accounts can read nothing but their own profile
-//   - TRIAL EXPIRY: every NEW restaurant is born as a 2-day trial, with its
+//   - TRIAL EXPIRY: every NEW restaurant is born as a 3-day trial, with its
 //     start stamped by the SERVER (trialStartedAt == request.time, satisfiable
 //     only by a serverTimestamp sentinel). The deadline is computed, not
 //     stored. An explicit `expiresAt` overrides it, and is Admin-SDK-only.
@@ -123,9 +123,16 @@ service cloud.firestore {
       //     client-supplied timestamp means no clock-skew window to defend.
       //
       //  2. `expiresAt` — an explicit deadline that OVERRIDES the computed one.
-      //     Writable only through the Admin SDK (which bypasses rules), i.e.
-      //     scripts/seedTrial.js and the activation tooling. This is how a
-      //     custom trial length or a paid-through subscription date is set.
+      //     Writable only through the Admin SDK (which bypasses rules). Three
+      //     writers, and no others:
+      //       - functions/ (verifyPurchase, onPlayNotification) — the automatic
+      //         one. A Play subscription's paid-through date lands here, and
+      //         a refund lands here as a date in the past.
+      //       - scripts/activateTenant.js — the manual override, for a customer
+      //         who paid you outside Play, a comp, or a support fix.
+      //       - scripts/seedTrial.js — the legacy shared demo sandbox.
+      //     NOTE the functions never DELETE these fields: deleting both is what
+      //     permanent looks like, and that stays a human decision.
       //
       // Activation = DELETING both fields, which is why "no field" must always
       // mean "permanent". Never replace this with an isPaid flag: absence
@@ -146,7 +153,7 @@ service cloud.firestore {
        *  applied to trialStartedAt at read time, so editing this and deploying
        *  re-times every trial in flight (including ones already expired). */
       function trialLength() {
-        return duration.value(2, 'd');
+        return duration.value(3, 'd');
       }
 
       // Explicit expiresAt wins; else the computed trial deadline; else the

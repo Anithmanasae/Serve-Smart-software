@@ -1,6 +1,7 @@
 import { View, Text, Pressable, StyleSheet, Alert } from "react-native";
-import { Redirect } from "expo-router";
+import { Redirect, router } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
+import { isBillingAvailable } from "@/lib/billing";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { BrandSplash } from "@/components/BrandSplash";
 import {
@@ -24,12 +25,20 @@ import { colors, space, radius, shadow } from "@/theme/theme";
  * into the app by itself, on every device at once.
  */
 export default function Pending() {
-  const { firebaseUser, profile, gate, loading, signOut, restaurantName } =
-    useAuth();
+  const {
+    firebaseUser,
+    profile,
+    gate,
+    gatedRole,
+    loading,
+    signOut,
+    restaurantName,
+    config,
+  } = useAuth();
 
   if (loading) return <BrandSplash />;
   // Approved (or activated) while looking at this screen → straight in.
-  if (profile) return <Redirect href={homePathForRole(profile.role)} />;
+  if (profile) return <Redirect href={homePathForRole(profile.role, config)} />;
   if (!firebaseUser || !gate) return <Redirect href="/login" />;
 
   async function onContact() {
@@ -46,6 +55,10 @@ export default function Pending() {
       );
     }
   }
+
+  // `gatedRole`, not `role` — the whole point of this screen is that the
+  // account is not usable, so `role` is already null here.
+  const isOwner = gatedRole === "cashier";
 
   const copy = {
     pending: {
@@ -71,11 +84,21 @@ export default function Pending() {
     expired: {
       icon: "⌛",
       title: "Your free trial has ended",
-      body: "Thanks for trying Smart Serve. Your menu, tables and settings are all still saved — nothing has been deleted. Get in touch to activate your restaurant and pick up exactly where you left off.",
+      // Staff cannot fix this and must not be told to try. The workspace is
+      // the owner's, the payment method is the owner's, and a waiter reading
+      // "get in touch to activate" will either call you or put a restaurant
+      // on their own card.
+      body: isOwner
+        ? "Thanks for trying Smart Serve. Your menu, tables and settings are all still saved — nothing has been deleted. Subscribe to pick up exactly where you left off."
+        : "Smart Serve is locked for this restaurant until the owner renews it. Nothing has been deleted — everything is exactly where you left it. Let your manager know.",
     },
   }[gate];
 
-  const showContact = gate === "expired" && hasContact;
+  // The owner of an expired workspace, on a build that can actually sell —
+  // the only combination that gets a Subscribe button. Everyone else falls
+  // back to the contact flow that existed before billing did.
+  const canSubscribe = gate === "expired" && isOwner && isBillingAvailable();
+  const showContact = gate === "expired" && isOwner && hasContact && !canSubscribe;
 
   return (
     <View style={styles.root}>
@@ -83,6 +106,25 @@ export default function Pending() {
         <Text style={styles.icon}>{copy.icon}</Text>
         <Text style={styles.title}>{copy.title}</Text>
         <Text style={styles.body}>{copy.body}</Text>
+
+        {canSubscribe && (
+          <>
+            <Pressable
+              style={({ pressed }) => [
+                styles.contactBtn,
+                pressed && styles.pressed,
+              ]}
+              onPress={() => router.push("/subscribe")}
+              onPressIn={feel.press}
+            >
+              <Text style={styles.contactText}>See plans</Text>
+            </Pressable>
+            <Text style={styles.hint}>
+              Billed through Google Play. Every device in your restaurant
+              unlocks the moment payment goes through.
+            </Text>
+          </>
+        )}
 
         {showContact && (
           <>

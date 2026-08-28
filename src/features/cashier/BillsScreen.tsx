@@ -29,17 +29,20 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { router } from "expo-router";
 import { formatMoney } from "@/lib/money";
 import { useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
+import { EmptyState } from "@/components/EmptyState";
 import { colors, radius, shadow, space } from "@/theme/theme";
 import { BrandHeader } from "@/components/BrandHeader";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import type { Bill, Order, Table } from "@/types/models";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useSettings } from "@/features/settings/SettingsContext";
+import { useActivationContext } from "@/features/onboarding";
 import {
   discardOrder,
   generateBill,
@@ -79,19 +82,25 @@ function timeAgo(fromMs: number, nowMs: number): string {
 export function BillsScreen() {
   const insets = useSafeAreaInsets();
   const { isTablet } = useResponsive();
-  const { profile, firebaseUser, role } = useAuth();
+  const { profile, firebaseUser, role, config } = useAuth();
   const cashierUid = profile?.uid ?? firebaseUser?.uid ?? "";
   const cashierName = profile?.name ?? "Cashier";
   const roleLabel = role ? ROLE_LABELS[role] ?? role : "";
 
   const { gstEnabled } = useSettings();
 
+  // A brand-new owner who has not billed anything yet. Null — and so false —
+  // for every established restaurant; see `ActivationProvider`.
+  const activation = useActivationContext();
+  const preFirstBill = activation?.active === true && !activation.firstOrderDone;
+  const orderEntryPath = config.tablesEnabled ? "/tables" : "/order";
+
   const { data: bills, loading: billsLoading } = useActiveBills();
   const {
     data: orders,
     preparing,
     loading: ordersLoading,
-  } = useBillableOrders();
+  } = useBillableOrders(config.kotEnabled);
   const { data: tables } = useAllTables();
 
   const [selectedBillId, setSelectedBillId] = useState<string | null>(null);
@@ -135,6 +144,10 @@ export function BillsScreen() {
       .filter((order) => !hasLiveKitchenLines(order))
       .map((order) => ({ kind: "unsent", order }));
 
+    // Both kitchen sections come back empty in a quick-billing restaurant
+    // (`isKitchenDone` is unconditionally true there, so nothing lands in
+    // `preparing`), and the `.filter` below drops an empty section — so the
+    // board reduces itself to Bills + Ready to bill without a branch here.
     return [
       { title: "Bills", data: billRows },
       { title: "Ready to bill", data: orderRows },
@@ -154,7 +167,8 @@ export function BillsScreen() {
         order,
         cashierUid,
         orderLabel(order),
-        gstEnabled
+        gstEnabled,
+        config.kotEnabled
       );
       feel.success(); // the bill exists; the settle sheet opens on top
       setSelectedBillId(billId);
@@ -239,14 +253,10 @@ export function BillsScreen() {
       {/* Header — cashier identity */}
       <ScreenHeader
         title="Bills"
+        // The cashier's own name and role, which is all the left-hand avatar
+        // used to add — and the profile button now carries the initial as a
+        // control rather than as decoration.
         subtitle={`${cashierName}${roleLabel ? ` · ${roleLabel}` : ""}`}
-        left={
-          <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
-              {cashierName.charAt(0).toUpperCase()}
-            </Text>
-          </View>
-        }
         right={<ProfileButton />}
       />
 
@@ -310,8 +320,32 @@ export function BillsScreen() {
               />
             )
           }
+          // An empty till is normal, so the tone is calm and there is no
+          // button — except for an owner who has not taken their first order,
+          // for whom this screen is a dead end rather than a quiet moment.
           ListEmptyComponent={
-            <Text style={styles.empty}>No bills to settle right now.</Text>
+            <EmptyState
+              icon="cash-register"
+              tone={preFirstBill ? "invite" : "calm"}
+              title={
+                preFirstBill
+                  ? "Your bills will appear here"
+                  : "Nothing waiting to be settled"
+              }
+              body={
+                preFirstBill
+                  ? "Take an order and it shows up here ready to bill, take payment and print."
+                  : "When an order is ready to pay, its table appears here."
+              }
+              action={
+                preFirstBill
+                  ? {
+                      label: "Take an order",
+                      onPress: () => router.push(orderEntryPath as never),
+                    }
+                  : undefined
+              }
+            />
           }
         />
       )}
@@ -572,16 +606,6 @@ function UnsentCard({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-
-  avatar: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.pill,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarText: { fontSize: 18, fontWeight: "700", color: colors.textInverse },
 
   list: { paddingHorizontal: space.s4 },
   listReadingWidth: { width: "100%", maxWidth: 760, alignSelf: "center" },

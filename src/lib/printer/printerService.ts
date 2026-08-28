@@ -30,6 +30,20 @@ import {
 
 const DEVICE_KEY = "sada.printer.device"; // JSON PrinterDevice
 const PAPER_KEY = "sada.printer.paperWidth"; // "58" | "80"
+/**
+ * The address of a printer that has actually ACCEPTED bytes from this device.
+ *
+ * The getting-started checklist used to tick its printer row on "a printer is
+ * saved", which is a record of the owner tapping a name in a list — not of
+ * anything reaching paper. A printer picked but never reached, or reached at
+ * the wrong paper width, ticked the row just as happily, and the owner found
+ * out during service. This is written only where a write RESOLVED, so the row
+ * means what it says.
+ *
+ * Keyed by address rather than a bare flag: swapping the printer for a
+ * different one puts the question back, correctly.
+ */
+const PRINTED_KEY = "sada.printer.printedFrom"; // PrinterDevice["address"]
 
 /** How the bytes reach the printer. */
 export type PrinterTransport = "bluetooth" | "usb";
@@ -128,6 +142,19 @@ export async function preparePrinter(device: PrinterDevice): Promise<void> {
   }
 }
 
+/** Has this device ever successfully printed to the printer it has saved? */
+export async function hasPrintedSuccessfully(): Promise<boolean> {
+  try {
+    const [device, printedFrom] = await Promise.all([
+      getSavedPrinter(),
+      AsyncStorage.getItem(PRINTED_KEY),
+    ]);
+    return device != null && printedFrom === device.address;
+  } catch {
+    return false;
+  }
+}
+
 /** Send raw ESC/POS bytes over whichever transport the device uses. */
 export async function printToDevice(
   device: PrinterDevice,
@@ -135,9 +162,13 @@ export async function printToDevice(
 ): Promise<void> {
   if (device.transport === "usb") {
     await printOverUsb(device.address, device.name, bytes);
-    return;
+  } else {
+    await printOverBluetooth(device.address, device.name, bytes);
   }
-  await printOverBluetooth(device.address, device.name, bytes);
+  // Only past the await, and only if it did not throw. Recorded for EVERY
+  // print, not just the test one: a cashier who never opened the test button
+  // but has been printing bills all week has plainly got a working printer.
+  AsyncStorage.setItem(PRINTED_KEY, device.address).catch(() => {});
 }
 
 /** Print to the SAVED printer; throws a friendly error when none is set. */

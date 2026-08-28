@@ -100,7 +100,9 @@ type GridEntry = MenuItemDoc | { id: string };
  * three-pane layout breathing instead of two designs to keep in step. The
  * centre grid gets whatever is left, and re-flows its columns to suit.
  */
-function tabletPanes(width: number) {
+/** Exported so the onboarding practice run lays out with the SAME numbers.
+ *  Two copies of these widths is two layouts that drift apart. */
+export function tabletPanes(width: number) {
   const rail = width >= 1100 ? 200 : width >= 900 ? 176 : 152;
   const cart =
     width >= 1280 ? 380 : width >= 1100 ? 344 : width >= 900 ? 312 : 288;
@@ -116,7 +118,7 @@ function tabletPanes(width: number) {
  * showing its price and its ＋ Add on one line, and a wrapped category label
  * costs nothing by comparison.
  */
-function phoneRailWidth(width: number): number {
+export function phoneRailWidth(width: number): number {
   return width >= 400 ? 116 : width >= 360 ? 104 : 96;
 }
 
@@ -139,7 +141,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   // Re-reads on every rotation, so the three-pane layout re-measures itself
   // instead of keeping the widths it was born with.
   const { width, isTablet, isLandscape } = useResponsive();
-  const { profile, role } = useAuth();
+  const { profile, role, config } = useAuth();
   const { gstEnabled } = useSettings();
   const { data: restaurant } = useRestaurantProfile();
   const waiterId = profile?.uid ?? "";
@@ -149,7 +151,15 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
 
   // Counter flow: billing staff taking a takeaway order can generate + settle
   // the bill right here (pay-first), instead of hopping to the Bills tab.
-  const canBillHere = !isDineIn && (role === "cashier" || role === "admin");
+  //
+  // Dine-in is normally excluded because it is "food first, pay after": the
+  // bill is raised from the Bills tab once the kitchen has finished. A
+  // restaurant with NO kitchen ticket has no such wait — the whole order
+  // exists only on this screen, and sending the cashier to another tab to
+  // charge for the cart in front of them would be the longest way round.
+  const canBillHere =
+    (!isDineIn || !config.kotEnabled) &&
+    (role === "cashier" || role === "admin");
 
   // ── Live data ───────────────────────────────────────────────────────────
   const categoriesState = useMenuCategories();
@@ -669,11 +679,19 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
   // then `generateBill` creates the bill (idempotent — reopens the existing
   // one if it was already generated) and the settle sheet takes payment.
   const handleGenerateBill = async () => {
-    if (!order || busy || pendingCount > 0) return;
+    if (!order || busy) return;
+    // Un-sent lines only block a bill where a kitchen is waiting for them.
+    if (config.kotEnabled && pendingCount > 0) return;
     setBusy(true);
     try {
       await flushPendingWrites();
-      const id = await generateBill(order, waiterId, tableLabel, gstEnabled);
+      const id = await generateBill(
+        order,
+        waiterId,
+        tableLabel,
+        gstEnabled,
+        config.kotEnabled
+      );
       feel.success(); // the bill exists — the settle sheet is about to open
       setBillId(id);
     } catch (e) {
@@ -835,6 +853,7 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     busy,
     orderLocked,
     canBillHere,
+    kotEnabled: config.kotEnabled,
     onQty: handleQty,
     onNotes: handleNotes,
     onSendKot: handleSendKot,

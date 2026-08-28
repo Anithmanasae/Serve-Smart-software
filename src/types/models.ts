@@ -46,14 +46,84 @@ export interface RestaurantProfile {
   /** Short human code (e.g. "K7MPQ2") owners share so staff can join this
    *  restaurant from the signup screen. Mirrored in restaurantCodes/{code}. */
   joinCode?: string;
-  /** Whether new bills charge GST — written true at registration. The live
-   *  billing switch is still the device-local SettingsContext. */
+  /** Whether new bills charge GST — written true at registration, and again
+   *  by the setup wizard when the owner answers the question there. It is the
+   *  DEFAULT a device adopts when it has no local answer of its own; the live
+   *  billing switch stays the device-local SettingsContext. */
   gstEnabled?: boolean;
+  /**
+   * The owner has actually been ASKED about GST and answered.
+   *
+   * Distinct from `gstEnabled` on purpose: that field is written `true` at
+   * registration, so its value cannot tell "the owner chose to charge GST"
+   * from "nobody has ever been asked". Charging tax by default and never
+   * raising it is the kind of thing a restaurant discovers from its
+   * accountant, so the checklist needs to know the difference. Absent = never
+   * asked, which is every restaurant that predates the question.
+   */
+  gstDecidedAt?: Ts;
+  /**
+   * FIRST-RUN ACTIVATION IS FINISHED — the getting-started checklist is done
+   * with this restaurant and must not appear again on ANY device.
+   *
+   * It lives here rather than only in AsyncStorage because the checklist is
+   * about the RESTAURANT, not about a tablet: with a local-only flag the
+   * owner's second device, and every waiter's phone, opened a months-old
+   * restaurant and offered to walk it through taking its first order. The
+   * local flag is kept as a cache so the card never flashes on a cold start.
+   *
+   * Absent = still activating, matching `needsSetup` and the trial fields:
+   * absence is the state every restaurant that predates this field is in, and
+   * they graduate the moment they meet the auto-retire test instead.
+   */
+  activationDoneAt?: Ts;
+
+  // ── HOW THIS RESTAURANT WORKS (the first-run setup wizard's answers) ──────
+  //
+  // ABSENT = the app exactly as it was before the wizard existed: kitchen
+  // tickets on, a floor of tables. That is the same absence-is-the-safe-
+  // default property the trial fields rely on, and it is what makes these
+  // safe to add to a live product — every restaurant that registered before
+  // this shipped has none of them and is completely unaffected.
+  //
+  // They live HERE, on the restaurant, and NOT in the device-local
+  // SettingsContext: the cashier's tablet and a waiter's phone have to agree
+  // about whether this restaurant has a kitchen display, or one of them shows
+  // a Send-KOT button whose ticket the other can never see.
+
+  /** What kind of place this is. Drives nothing on its own — it is the reason
+   *  the other two are what they are, and what the starter menu was seeded
+   *  from. Kept so the setup screen can show what was picked. */
+  businessType?: "cafe" | "qsr" | "foodtruck" | "restaurant";
+  /**
+   * Do orders go to the kitchen as a ticket before they are billed?
+   *
+   * `false` is QUICK BILLING: no KDS tab, no Send-KOT step, the order screen
+   * bills straight from the cart, and the billing guard stops demanding a
+   * completed ticket. ABSENT = true.
+   */
+  kotEnabled?: boolean;
+  /** Does this restaurant seat guests at tables? `false` hides the floor and
+   *  the table setup screen, and takeaway becomes the only order type.
+   *  ABSENT = true. */
+  tablesEnabled?: boolean;
+  /**
+   * FIRST-RUN MARKER. Written `true` by the owner-registration batch and
+   * DELETED when the wizard finishes; while it is true the owner is routed to
+   * /setup on every launch, so an interrupted setup resumes rather than
+   * leaving a half-configured restaurant.
+   *
+   * The wizard is gated on this rather than on "no config fields yet"
+   * precisely because every restaurant that predates the wizard also has no
+   * config fields — gating on absence would have shown the wizard to the
+   * entire existing customer base on their next launch.
+   */
+  needsSetup?: boolean;
   /**
    * SELF-SERVE TRIALS. Stamped by the SERVER at registration — the create rule
    * demands `trialStartedAt == request.time`, which only a serverTimestamp()
    * sentinel satisfies, so a client can neither backdate nor omit it. The
-   * deadline is COMPUTED as `trialStartedAt + 2 days` in firestore.rules
+   * deadline is COMPUTED as `trialStartedAt + 3 days` in firestore.rules
    * (`trialLength()`), never stored, so there is nothing to tamper with.
    *
    * Every new restaurant has this. Activating a paying customer DELETES it.
@@ -62,8 +132,10 @@ export interface RestaurantProfile {
   /**
    * An explicit deadline that OVERRIDES the computed one — a custom trial
    * length, or a subscription's paid-through date. Written only through the
-   * Admin SDK (scripts/seedTrial.js, the activation tooling); no client can
-   * set, change or clear it.
+   * Admin SDK; no client can set, change or clear it. The writers are the
+   * Play Billing functions in `functions/` (automatic — renewals push this
+   * forward, refunds push it into the past) and `scripts/activateTenant.js`
+   * (manual). See CLAUDE.md.
    *
    * ABSENT trialStartedAt AND expiresAt = NEVER EXPIRES. Real customers have
    * neither field and are entirely unaffected by the expiry rules.

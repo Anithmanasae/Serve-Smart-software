@@ -59,8 +59,17 @@ export const ACTIVE_KOT_STATUSES = ["new", "preparing", "ready"] as const;
  */
 export function isKitchenDone(
   order: Order,
-  orderIdsWithActiveKots: ReadonlySet<string>
+  orderIdsWithActiveKots: ReadonlySet<string>,
+  /** Does this restaurant have a kitchen step at all? Defaults to the
+   *  pre-wizard answer so existing callers are unchanged. */
+  kotEnabled = true
 ): boolean {
+  // No kitchen step means no kitchen to be waiting for. Every clause below
+  // asks how far a ticket has got, and in a quick-billing restaurant there is
+  // never a ticket — so an order with something in it is simply billable, and
+  // the "Preparing…" and "Never sent to kitchen" sections stay empty rather
+  // than swallowing every order the till takes.
+  if (!kotEnabled) return true;
   const lines = order.items.filter((i) => !i.voided && i.qty > 0);
   const hasSent = lines.some((i) => i.kotId !== null);
   const hasUnsent = lines.some((i) => i.kotStatus === "pending");
@@ -79,7 +88,7 @@ export function isKitchenDone(
  * order automatically drops back from `data` into `preparing` until the
  * kitchen completes that ticket too.
  */
-export function useBillableOrders() {
+export function useBillableOrders(kotEnabled = true) {
   const ordersQ = useMemo(
     () => query(paths.orders(), where("status", "==", "open")),
     []
@@ -99,12 +108,14 @@ export function useBillableOrders() {
     );
     const activeKotOrderIds = new Set(kots.data.map((k) => k.orderId));
     return {
-      data: open.filter((o) => isKitchenDone(o, activeKotOrderIds)),
-      preparing: open.filter((o) => !isKitchenDone(o, activeKotOrderIds)),
+      data: open.filter((o) => isKitchenDone(o, activeKotOrderIds, kotEnabled)),
+      preparing: open.filter(
+        (o) => !isKitchenDone(o, activeKotOrderIds, kotEnabled)
+      ),
       loading: orders.loading || kots.loading,
       error: orders.error ?? kots.error,
     };
-  }, [orders, kots]);
+  }, [orders, kots, kotEnabled]);
 }
 
 export function useAllTables() {

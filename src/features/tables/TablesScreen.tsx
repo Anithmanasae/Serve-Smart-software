@@ -31,6 +31,7 @@ import { BrandHeader } from "@/components/BrandHeader";
 import { ScreenHeader } from "@/components/ScreenHeader";
 import type { Kot, Order, OrderItem, Table, TableStatus } from "@/types/models";
 import { ProfileButton } from "@/components/ProfileButton";
+import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/features/auth/AuthContext";
 import { KotAlertBanner, useKotStatusAlerts } from "@/features/order/kotAlerts";
 import { TableCard } from "./TableCard";
@@ -65,6 +66,9 @@ export function TablesScreen() {
   // Counter flow entry point: cashier/admin start a takeaway order (no table)
   // straight from the floor — items → KOT → bill, all on the order screen.
   const canTakeaway = profile?.role === "cashier" || profile?.role === "admin";
+  // Table Setup is owner-only (see Account), so the empty floor only offers
+  // the button to someone the screen behind it would actually let in.
+  const canManageFloor = canTakeaway;
 
   // Re-reads on rotation, so the floor re-flows instead of staying in the
   // column count it was first laid out with.
@@ -260,10 +264,28 @@ export function TablesScreen() {
           styles.grid,
           { paddingBottom: insets.bottom + space.s6 },
         ]}
+        // An owner reads a blank floor as a broken app, not as an empty one.
+        // Only admin/cashier can do anything about it, so only they are
+        // offered the button — a waiter gets the explanation without a door
+        // that would be locked when they reached it.
         ListEmptyComponent={
-          <Text style={styles.empty}>
-            {loading ? "Loading floor…" : "No tables to show."}
-          </Text>
+          loading ? (
+            <Text style={styles.empty}>Loading floor…</Text>
+          ) : (
+            <EmptyState
+              icon="table-furniture"
+              title="No tables on your floor yet"
+              body="Add your tables and each one becomes a card here — tap it to start an order on that table."
+              action={
+                canManageFloor
+                  ? {
+                      label: "Set up my tables",
+                      onPress: () => router.push("/tables-setup"),
+                    }
+                  : undefined
+              }
+            />
+          )
         }
         renderItem={({ item }) => {
           if (item.id.startsWith(TABLE_SPACER)) {

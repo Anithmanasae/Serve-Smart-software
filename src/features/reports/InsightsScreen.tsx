@@ -52,6 +52,7 @@ import {
   type DateRange,
   type PresetKind,
 } from "./reportsData";
+import { useAuth } from "@/features/auth/AuthContext";
 import { DateRangeSheet } from "./DateRangeSheet";
 import { KpiCard } from "./KpiCard";
 import { RevenueChart } from "./RevenueChart";
@@ -115,6 +116,7 @@ function formatRangeLabel(range: DateRange): string {
 export function InsightsScreen() {
   const insets = useSafeAreaInsets();
   const { isTablet } = useResponsive();
+  const { restaurantName, config } = useAuth();
   // Two tiles across on a phone, three on a tablet. Fixed either way rather
   // than derived from width: the six KPIs read as a block, and a count that
   // shifted with the window would reshuffle that block on every rotation.
@@ -207,6 +209,7 @@ export function InsightsScreen() {
       ? series
       : series.slice(-DAILY_ROWS_COLLAPSED);
 
+
   const selectPreset = (kind: PresetKind) => {
     feel.select(); // Today / Week / Month are a range picker, not buttons
     setSelection({ kind });
@@ -265,7 +268,9 @@ export function InsightsScreen() {
 
       {/* Date range selector — presets plus a custom range. Scrolls
           horizontally so the custom chip can carry the full range as its
-          label without squeezing the presets. */}
+          label without squeezing the presets.
+
+          */}
       <View style={styles.rangeRow}>
         {/* A vector glyph, not the 🗓️ codepoint: an emoji renders in the
             platform's own colour and weight, which is the one thing in this
@@ -366,6 +371,14 @@ export function InsightsScreen() {
         >
           {tab === "analytics" ? (
             <>
+              {/* THE FRONT DOOR of a restaurant that has not billed anything
+                  yet. Insights is where an owner lands, and until there is a
+                  single bill every tile below reads ₹0.00 — an accounting
+                  screen accurately reporting that nothing has happened, which
+                  is the worst first impression this app can make. The
+                  checklist stands in its place, and the real dashboard
+                  arrives the moment there is something in it to read. That
+                  swap is itself part of the reward. */}
               {/* KPI tiles — one wrapping grid, 2 across on a phone and 3 on
                   a tablet. The reading order is fixed and meaningful, so the
                   tiles wrap rather than rearrange. */}

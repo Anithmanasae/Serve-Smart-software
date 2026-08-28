@@ -63,10 +63,21 @@ function firedAt(kot: LiveKot): string {
 export const TableTicketCard = memo(function TableTicketCard({
   group,
   onPress,
+  onCompleteOverride,
 }: {
   group: TableGroup;
   /** Tapping the card (outside the button) opens the detail sheet. */
   onPress: () => void;
+  /**
+   * Handle COMPLETE here instead of writing to Firestore.
+   *
+   * The onboarding practice run mounts this exact card so a new owner learns
+   * the board they will actually use, rather than a drawing of it — but that
+   * run must leave no trace, so it cannot be allowed to complete a ticket
+   * that does not exist. Absent (every real board) the card behaves exactly
+   * as it always has.
+   */
+  onCompleteOverride?: () => void;
 }) {
   const additional = hasAdditionalRound(group);
   const accent = group.completed
@@ -94,6 +105,11 @@ export const TableTicketCard = memo(function TableTicketCard({
 
   const onComplete = useCallback(() => {
     animateNextLayout(); // the card leaves the board on status change
+    if (onCompleteOverride) {
+      onCompleteOverride();
+      feel.success();
+      return;
+    }
     completeGroup(group)
       // Marking a table's food done is the kitchen's whole job — it earns a
       // confirm, and the chef's hands are usually busy enough that the pulse
@@ -106,7 +122,7 @@ export const TableTicketCard = memo(function TableTicketCard({
           e instanceof Error ? e.message : String(e)
         );
       });
-  }, [group]);
+  }, [group, onCompleteOverride]);
 
   return (
     <Pressable

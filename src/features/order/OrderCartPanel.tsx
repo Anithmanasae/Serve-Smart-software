@@ -1,6 +1,7 @@
 /**
  * "Current Order" — every line on the order, the money, and the two commit
- * buttons (Send KOT / Generate Bill).
+ * buttons (Send KOT / Generate Bill) — or, in a quick-billing restaurant,
+ * the single "Charge" button that replaces both.
  *
  * One component, two homes: on a phone it is the body of the bottom sheet
  * (`variant="sheet"`), on a tablet it is the permanently-docked right pane
@@ -33,6 +34,10 @@ interface OrderCartPanelProps {
   orderLocked: boolean;
   /** Counter flow: this user may bill a takeaway order here. */
   canBillHere: boolean;
+  /** This restaurant sends orders to a kitchen ticket before billing. When
+   *  false the Send-KOT button does not exist and billing is the only
+   *  action — see the block below. */
+  kotEnabled: boolean;
   onQty: (lineId: string, qty: number) => void;
   onNotes: (lineId: string, notes: string) => void;
   onSendKot: () => void;
@@ -53,6 +58,7 @@ export function OrderCartPanel({
   busy,
   orderLocked,
   canBillHere,
+  kotEnabled,
   onQty,
   onNotes,
   onSendKot,
@@ -137,24 +143,31 @@ export function OrderCartPanel({
           <Text style={styles.totalValue}>{formatMoney(payable)}</Text>
         </View>
 
-        <PressableScale
-          // A full-width bar needs a far gentler squeeze than a 32px stepper.
-          activeScale={0.98}
-          // These two commit money and fire the kitchen, so they land heavier
-          // than an ordinary tap on touch-down; `onSendKot`/`onGenerateBill`
-          // then answer with a confirm or a reject once the write resolves.
-          haptic="press"
-          style={[
-            styles.sendBtn,
-            (pendingCount === 0 || busy) && styles.btnDisabled,
-          ]}
-          onPress={onSendKot}
-          disabled={pendingCount === 0 || busy}
-        >
-          <Text style={styles.btnText}>
-            ➤ Send KOT{pendingCount > 0 ? ` (${pendingCount})` : ""}
-          </Text>
-        </PressableScale>
+        {/* QUICK BILLING has no kitchen step, so it gets ONE button and that
+            button is the bill. The two-button version below is a sequence —
+            fire the food, then take the money — and a restaurant that told us
+            it has no kitchen ticket should not be shown the first half of a
+            sequence it does not run, greyed out, forever. */}
+        {kotEnabled && (
+          <PressableScale
+            // A full-width bar needs a far gentler squeeze than a 32px stepper.
+            activeScale={0.98}
+            // These two commit money and fire the kitchen, so they land heavier
+            // than an ordinary tap on touch-down; `onSendKot`/`onGenerateBill`
+            // then answer with a confirm or a reject once the write resolves.
+            haptic="press"
+            style={[
+              styles.sendBtn,
+              (pendingCount === 0 || busy) && styles.btnDisabled,
+            ]}
+            onPress={onSendKot}
+            disabled={pendingCount === 0 || busy}
+          >
+            <Text style={styles.btnText}>
+              ➤ Send KOT{pendingCount > 0 ? ` (${pendingCount})` : ""}
+            </Text>
+          </PressableScale>
+        )}
 
         {canBillHere && lines.length > 0 ? (
           <PressableScale
@@ -162,17 +175,20 @@ export function OrderCartPanel({
             haptic="press"
             style={[
               styles.billBtn,
-              (pendingCount > 0 || busy) && styles.btnDisabled,
+              // Un-sent lines block billing only where a kitchen is waiting
+              // for them. With no KOT step there is nothing to send, so the
+              // cart is billable the moment it has something in it.
+              ((kotEnabled && pendingCount > 0) || busy) && styles.btnDisabled,
             ]}
             onPress={onGenerateBill}
-            disabled={pendingCount > 0 || busy}
+            disabled={(kotEnabled && pendingCount > 0) || busy}
           >
             <Text style={styles.btnText}>
               {orderLocked
                 ? "View Bill"
-                : pendingCount > 0
+                : kotEnabled && pendingCount > 0
                   ? "Send KOT before billing"
-                  : `Generate Bill · ${formatMoney(payable)}`}
+                  : `${kotEnabled ? "Generate Bill" : "Charge"} · ${formatMoney(payable)}`}
             </Text>
           </PressableScale>
         ) : null}

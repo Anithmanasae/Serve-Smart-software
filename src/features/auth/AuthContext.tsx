@@ -26,7 +26,7 @@
  *   the ACCOUNT      users/{uid}         expiresAt
  *
  * The restaurant doc is the important one. Every new restaurant is born a
- * 2-day trial and its whole staff is gated by that single field — a waiter who
+ * 3-day trial and its whole staff is gated by that single field — a waiter who
  * joined with a join code carries no expiry of their own, so reading only the
  * user profile would leave them looking fine on the client while every query
  * failed server-side. Both docs are watched live, and the root doc stays
@@ -61,13 +61,17 @@ import {
   registerRestaurant,
   type SignupRole,
 } from "@/features/auth/signupApi";
+import {
+  resolveRestaurantConfig,
+  type RestaurantConfig,
+} from "@/features/settings/restaurantConfig";
 import type { AppUser, RestaurantProfile, Role } from "@/types/models";
 
 export type { SignupRole };
 
 /** Trial length. MUST match `trialLength()` in firestore.rules — the rules are
  *  what actually enforce it; this only drives the countdown and the screen. */
-const TRIAL_DAYS = 2;
+const TRIAL_DAYS = 3;
 const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
 const NOT_LINKED_MESSAGE =
@@ -81,6 +85,16 @@ const TRIAL_ENDED_MESSAGE =
 /** setTimeout stores its delay in a signed 32-bit int; anything larger
  *  overflows and fires IMMEDIATELY. Re-arm in chunks no bigger than this. */
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+/**
+ * How long sign-in may spend unresolved before the app gives up and shows the
+ * login screen.
+ *
+ * Generous — it covers a cold start on a restaurant's wifi plus a signup batch
+ * committing — but finite, because the alternative to giving up is the splash
+ * screen forever. See `armResolveTimer`.
+ */
+const AUTH_RESOLVE_TIMEOUT_MS = 20_000;
 
 /** Dev-build fallback tenant for logins that predate userIndex (migration). */
 function devFallbackRestaurantId(): string | null {
@@ -113,7 +127,43 @@ interface AuthState {
   /** Its display name — readable even once expired, so the "trial ended"
    *  screen can name the restaurant it's talking about. */
   restaurantName: string | null;
+  /**
+   * The restaurant root doc itself, live — the receipt header, the join code,
+   * the wizard's answers and the activation marker.
+   *
+   * Exposed because this subscription already exists for the trial clock, so
+   * a reader that needs one more field off this document costs nothing;
+   * opening a second listener on the busiest doc in the restaurant to read a
+   * field this one already has would be the expensive way to ask.
+   *
+   * `config` above stays the way to ask how the restaurant WORKS — it resolves
+   * what an absent field means, and no caller should be re-deciding that.
+   */
+  restaurant: RestaurantProfile | null;
+  /**
+   * How this restaurant works — the setup wizard's answers, live. Derived
+   * from the same root-doc subscription as the trial clock, so it costs no
+   * extra listener and every device re-shapes the moment an answer changes.
+   *
+   * Defaults to kitchen-tickets-on / tables-on for every restaurant that
+   * predates the wizard — but NOT while the doc is still in flight: `loading`
+   * stays true until the root doc has answered, so no screen ever acts on
+   * that default mistaking it for an answer. See `restaurantAnswered` and
+   * `resolveRestaurantConfig`.
+   */
+  config: RestaurantConfig;
   gate: GateStatus;
+  /**
+   * The role on the profile doc REGARDLESS of whether the account is usable.
+   *
+   * `role` above is null the moment a gate closes — that is the point of it.
+   * But the gate screens have to tell an owner from their staff: an expired
+   * workspace offers the owner a way to pay and everyone else "ask your
+   * manager", and offering a waiter a subscription button would invite them to
+   * put a restaurant on their own card. Read this ONLY to choose what to say;
+   * it grants nothing, and `role` remains the one that gates behaviour.
+   */
+  gatedRole: Role | null;
   /** When this workspace stops working (ms epoch), or null if it never does.
    *  Drives the countdown banner; NOT the enforcement (that's firestore.rules). */
   trialEndsAt: number | null;
@@ -149,10 +199,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [restaurantDoc, setRestaurantDoc] = useState<RestaurantProfile | null>(
     null,
   );
-  // True only when the snapshot positively said "no such doc" (vs. an error,
-  // which we treat as signed-out rather than "account removed").
+  // True only when the SERVER positively said "no such doc" — never from a
+  // cache-only miss, and never from an error. This one boolean is the whole
+  // difference between "your account was removed" and "I couldn't see it just
+  // now", and the app locks people out on it, so it is set in exactly two
+  // places and both of them have heard back from the backend. See the profile
+  // listener.
   const [docMissing, setDocMissing] = useState(false);
   const [loading, setLoading] = useState(true);
+  /**
+   * Has the restaurant listener SAID ANYTHING yet — a doc, a miss, or an
+   * error? Not "is there a doc": the question is whether we have an answer at
+   * all, and `restaurantDoc === null` cannot tell the two apart.
+   *
+   * It has to be tracked separately because `resolveRestaurantConfig(null)`
+   * returns DEFAULT_CONFIG, whose every value is a working restaurant with a
+   * kitchen display, a floor, and setup already finished. Handing that out
+   * while the doc is still in flight is not a harmless default — it is a
+   * confident wrong answer, and the app acts on it:
+   *
+   *  - the tab bar draws the KDS tab and the order screen draws Send-to-
+   *    Kitchen, so a restaurant that answered "no kitchen tickets" gets the
+   *    KOT app anyway;
+   *  - `needsSetup` reads false, so `(app)/setup` believes a brand-new
+   *    restaurant is a returning one — it seeds the menu but NO FLOOR, skips
+   *    `markSetupCompleted`, and sends the owner home instead of into the
+   *    walkthrough.
+   *
+   * The profile listener used to clear `loading` on its own, so that window
+   * was open on every launch. Now nothing downstream sees a config until the
+   * restaurant doc has answered. An ERROR counts as an answer — DEFAULT_CONFIG
+   * is the right fallback once we know we cannot do better, and holding the
+   * splash for ever on an offline tablet would be the worse failure.
+   */
+  const [restaurantAnswered, setRestaurantAnswered] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
@@ -160,6 +240,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let unsubProfile: (() => void) | null = null;
     let unsubRestaurant: (() => void) | null = null;
     let profileRid: string | null = null;
+    /**
+     * Have we EVER held this login's profile document?
+     *
+     * The difference between "your account was removed" and "you never had an
+     * account here" — and the app locks people out on the first, so it may
+     * only ever be concluded from a transition. See the profile listener.
+     */
+    let sawProfile = false;
+    /**
+     * Guarantees `loading` resolves.
+     *
+     * Every branch below that waits for something — a signup batch mid-flight,
+     * a userIndex doc that has not arrived, a profile listener that has not
+     * spoken — waits by RETURNING, which leaves `loading` true and the app on
+     * the splash screen. Any one of them failing to fire again is a permanent
+     * white screen, which is exactly what a user reports as "it just hangs".
+     * This is the floor under all of them: on expiry the app gives up and
+     * shows the login screen, which is recoverable, instead of nothing, which
+     * is not.
+     */
+    let resolveTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearResolveTimer = () => {
+      if (resolveTimer) {
+        clearTimeout(resolveTimer);
+        resolveTimer = null;
+      }
+    };
+    const armResolveTimer = () => {
+      clearResolveTimer();
+      resolveTimer = setTimeout(() => {
+        resolveTimer = null;
+        console.warn(
+          "[auth] sign-in never resolved — falling back to signed-out.",
+        );
+        setRawProfile(null);
+        setDocMissing(false);
+        setLoading(false);
+        // Nothing is coming. Stop holding the splash for a restaurant doc
+        // that is never going to answer either.
+        setRestaurantAnswered(true);
+      }, AUTH_RESOLVE_TIMEOUT_MS);
+    };
 
     const unsubAuth = onAuthStateChanged(auth, (user) => {
       unsubIndex?.();
@@ -168,6 +290,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsubProfile = null;
       unsubRestaurant?.();
       unsubRestaurant = null;
+      clearResolveTimer();
+      sawProfile = false;
       profileRid = null;
       setFirebaseUser(user);
       if (!user) {
@@ -175,11 +299,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRestaurantId(null);
         setRawProfile(null);
         setRestaurantDoc(null);
+        // Signed out: there is no restaurant to wait for, and `resolving`
+        // below only ever holds while a firebaseUser exists.
+        setRestaurantAnswered(false);
         setDocMissing(false);
         setLoading(false);
         return;
       }
       setLoading(true);
+      // A NEW login answers for itself. Without this, the previous account's
+      // config would stand in for the incoming one's for a beat — which on a
+      // shared tablet is one restaurant's shape drawn over another's.
+      setRestaurantAnswered(false);
+      armResolveTimer();
 
       const subscribeProfile = (rid: string) => {
         if (profileRid === rid && unsubProfile) return;
@@ -187,19 +319,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setActiveRestaurantId(rid);
         setRestaurantId(rid);
         unsubProfile?.();
+        /**
+         * THE PROFILE LISTENER, and the two distinctions it must never lose.
+         *
+         * **"Gone" vs "I can't see it."** A document snapshot arrives empty
+         * for reasons that have nothing to do with an admin removing anybody:
+         * the client is offline, the app was backgrounded and the listen
+         * stream is re-establishing, or another listener on this restaurant
+         * was denied and the SDK dropped the cached collection on its way to
+         * resetting. `metadata.fromCache` separates them — it is false only
+         * when the BACKEND confirmed this snapshot. A cache-only miss is a gap
+         * in our knowledge and is ignored outright, so a blip mid-service
+         * leaves the session exactly as it was. Data that EXISTS is always
+         * used, cached or not: a stale profile is still a profile, and there
+         * is no reason to hold up a shift to re-confirm a role that changes
+         * yearly.
+         *
+         * **"Removed" vs "never had one."** Removal is a TRANSITION — the doc
+         * was here and now the server says it is not. `sawProfile` is what
+         * makes that a transition rather than a guess. Without it, the very
+         * first look at a brand-new signup (whose batch may still be settling)
+         * comes back empty and the owner is told their account was deleted —
+         * permanently, because nothing ever clears that verdict. A first look
+         * that comes back genuinely empty means something else entirely: this
+         * login has no profile in this restaurant, which is the "not linked"
+         * path that already exists and signs out with an explanation.
+         */
         unsubProfile = onSnapshot(
           paths.user(user.uid),
           (snap) => {
-            setRawProfile(
-              snap.exists() ? { ...snap.data(), uid: user.uid } : null,
+            if (snap.exists()) {
+              clearResolveTimer();
+              sawProfile = true;
+              setRawProfile({ ...snap.data(), uid: user.uid });
+              setDocMissing(false);
+              setLoading(false);
+              return;
+            }
+
+            // Not in the cache we happen to hold. That is not an answer.
+            if (snap.metadata.fromCache) return;
+
+            // A signup batch is still settling; its own writes will arrive.
+            if (isSignupInProgress()) return;
+
+            clearResolveTimer();
+            if (sawProfile) {
+              // It WAS here, and the server says it no longer is. The only
+              // thing that produces this is a real deletion.
+              console.warn("[auth] profile deleted server-side — removed.");
+              setRawProfile(null);
+              setDocMissing(true);
+              setLoading(false);
+              return;
+            }
+
+            // Never seen. This login simply has no profile in this
+            // restaurant — say so, rather than accusing anyone of deleting it.
+            console.warn(
+              `[auth] no profile at users/${user.uid} in "${rid}" — not linked.`,
             );
-            setDocMissing(!snap.exists());
+            setDocMissing(false);
             setLoading(false);
+            setNotice(NOT_LINKED_MESSAGE);
+            fbSignOut(auth).catch(() => {});
           },
           (e) => {
             // Profile unreadable (offline, rules) — treat as signed-out rather
             // than crashing the app or claiming the account was removed.
             console.warn("[auth] failed to load profile:", e);
+            clearResolveTimer();
             setRawProfile(null);
             setDocMissing(false);
             setLoading(false);
@@ -212,12 +401,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         unsubRestaurant?.();
         unsubRestaurant = onSnapshot(
           paths.restaurantProfile(),
-          (snap) => setRestaurantDoc(snap.exists() ? snap.data() : null),
+          (snap) => {
+            setRestaurantDoc(snap.exists() ? snap.data() : null);
+            // An answer, either way — see `restaurantAnswered`. A miss is as
+            // much of an answer as a doc: it means DEFAULT_CONFIG is the truth
+            // here, rather than a guess we have not checked yet.
+            setRestaurantAnswered(true);
+          },
           (e) => {
             // Unreadable (offline, or not a member). Fall back to the account
             // field alone rather than locking someone out on a network blip.
             console.warn("[auth] failed to load restaurant profile:", e);
             setRestaurantDoc(null);
+            setRestaurantAnswered(true);
           },
         );
       };
@@ -232,6 +428,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             subscribeProfile(snap.data().restaurantId);
             return;
           }
+          // Same rule as the profile listener: an empty snapshot that only
+          // the local cache vouches for is not an answer. A cold start begins
+          // with an empty cache, and acting on that miss is how a perfectly
+          // linked account gets signed out — or, in a dev build, pointed at
+          // the fallback restaurant where it has no profile at all and is
+          // then reported as "removed".
+          if (snap.metadata.fromCache) return;
           if (isSignupInProgress()) return; // batch in flight — keep waiting
           const fallback = devFallbackRestaurantId();
           if (fallback) {
@@ -248,6 +451,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
         (e) => {
           console.warn("[auth] failed to resolve restaurant:", e);
+          clearResolveTimer();
           setRawProfile(null);
           setDocMissing(false);
           setLoading(false);
@@ -255,6 +459,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
     });
     return () => {
+      clearResolveTimer();
       unsubIndex?.();
       unsubProfile?.();
       unsubRestaurant?.();
@@ -344,8 +549,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     !expired;
   const profile = usable ? rawProfile : null;
 
+  /**
+   * Still resolving THIS login — the profile, or the restaurant doc the whole
+   * app's shape is read off. Both must have answered before anything renders:
+   * see `restaurantAnswered`. Used for the gate as well as the exported
+   * `loading`, because the gate itself is decided partly from the restaurant
+   * doc (the tenant's trial deadline lives there).
+   */
+  const resolving = loading || (!!firebaseUser && !restaurantAnswered);
+
   let gate: GateStatus = null;
-  if (firebaseUser && !loading && !profile) {
+  if (firebaseUser && !resolving && !profile) {
     if (expired && rawProfile !== null) {
       // Wins over every other reason: the account is approved and active, it's
       // the trial that ran out. Shown in the window before sign-out lands, and
@@ -368,9 +582,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     role: profile?.role ?? null,
     restaurantId,
     restaurantName: restaurantDoc?.name ?? null,
+    restaurant: restaurantDoc,
+    config: resolveRestaurantConfig(restaurantDoc),
     gate,
+    gatedRole: rawProfile?.role ?? null,
     trialEndsAt: expiresAtMs,
-    loading,
+    loading: resolving,
     notice,
     signIn: async (email, password) => {
       setNotice(null);

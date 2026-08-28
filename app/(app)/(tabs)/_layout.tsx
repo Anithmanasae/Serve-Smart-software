@@ -2,6 +2,7 @@ import { Tabs } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
 import { useResponsive } from "@/lib/responsive";
 import { TABS, TabBar, canSeeTab } from "@/components/TabBar";
+import { ActivationProvider } from "@/features/onboarding";
 
 /**
  * The app's top-level navigator.
@@ -20,13 +21,18 @@ import { TABS, TabBar, canSeeTab } from "@/components/TabBar";
  * `freezeOnBlur`) is still the navigator's.
  */
 export default function TabsLayout() {
-  const { profile } = useAuth();
+  const { profile, config } = useAuth();
   // The (app) stack has already gated on auth and redirected if there is no
   // profile; this only narrows the type for the role checks below.
   const { isTablet } = useResponsive();
   if (!profile) return null;
 
   return (
+    // Wraps the navigator, not a screen: the first-order coach has to survive
+    // the trip from Tables to a table's order to Bills, which is the whole
+    // journey it narrates. It renders nothing at all for anyone who is not a
+    // brand-new owner — see `ActivationProvider`.
+    <ActivationProvider>
     <Tabs
       tabBar={(props) => <TabBar {...props} />}
       screenOptions={{
@@ -56,7 +62,10 @@ export default function TabsLayout() {
           name={tab.name}
           options={{
             title: tab.title,
-            href: canSeeTab(tab, profile.role) ? tab.href : null,
+            // Role AND the restaurant's setup: a quick-billing cafe has no
+            // KDS and a food truck has no floor, so those routes get no href
+            // at all rather than a tab leading to an empty screen.
+            href: canSeeTab(tab, profile.role, config) ? tab.href : null,
           }}
         />
       ))}
@@ -78,6 +87,7 @@ export default function TabsLayout() {
           in each screen's header — see `src/components/ProfileButton.tsx`.
           The bar is for the modules a shift moves between; settings are not
           one, and the slot is worth more to the six that are. */}
-    </Tabs>
+      </Tabs>
+    </ActivationProvider>
   );
 }

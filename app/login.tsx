@@ -16,17 +16,19 @@ import { homePathForRole } from "@/features/auth/roleRoutes";
 import { BrandLogo } from "@/components/BrandLogo";
 import { DEMO_MODE, FIREBASE_PROJECT_ID } from "@/lib/firebase";
 import { feel } from "@/lib/feedback";
+// ONBOARDING_PREVIEW (temporary — see PreviewOnboardingButton for how to remove)
+import { PreviewOnboardingButton } from "@/features/onboarding/PreviewOnboardingButton";
 import { colors, space, radius } from "@/theme/theme";
 
 export default function Login() {
-  const { signIn, profile, gate, notice } = useAuth();
+  const { signIn, profile, gate, notice, config } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Already signed in → go to role home.
-  if (profile) return <Redirect href={homePathForRole(profile.role)} />;
+  if (profile) return <Redirect href={homePathForRole(profile.role, config)} />;
   // Signed in but pending/denied/restricted → status screen.
   if (gate) return <Redirect href="/pending" />;
 
@@ -116,23 +118,44 @@ export default function Login() {
           </Pressable>
 
           {/* Open in EVERY build. Self-signup IS the trial: registering a new
-              restaurant starts a server-stamped 2-day clock, so one APK can be
+              restaurant starts a server-stamped 3-day clock, so one APK can be
               handed to any number of prospects and each gets their own private
               workspace. Hiding this used to be the demo build's whole job;
               enforcement now lives in firestore.rules, where it belongs. */}
           <Pressable
-            style={({ pressed }) => [styles.signupLink, pressed && { opacity: 0.6 }]}
+            style={({ pressed }) => [
+              styles.button,
+              styles.signupButton,
+              busy && styles.buttonDisabled,
+              pressed && styles.buttonPressed,
+            ]}
             onPress={() => router.push("/signup")}
             onPressIn={feel.press}
             disabled={busy}
           >
-            <Text style={styles.signupText}>
-              New here?{" "}
-              <Text style={styles.signupTextBold}>
-                Start a free 2-day trial
-              </Text>
+            <Text style={styles.buttonText}>Start a free 3-day trial</Text>
+          </Pressable>
+
+          {/* The staff door, deliberately quieter than the one above it.
+              `/signup` registers a whole restaurant and is what the ads point
+              at; this is for someone whose manager has already handed them a
+              join code. Both used to be tabs on one screen, which let an
+              owner pick the wrong one and strand themselves in a pending
+              account belonging to no restaurant. */}
+          <Pressable
+            style={({ pressed }) => [styles.joinLink, pressed && { opacity: 0.6 }]}
+            onPress={() => router.push("/join")}
+            onPressIn={feel.press}
+            disabled={busy}
+          >
+            <Text style={styles.joinText}>
+              Joining a team?{" "}
+              <Text style={styles.joinTextBold}>Enter your join code</Text>
             </Text>
           </Pressable>
+
+          {/* ONBOARDING_PREVIEW (temporary) */}
+          <PreviewOnboardingButton />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -194,7 +217,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 2,
   },
-  signupLink: { alignItems: "center", padding: space.s3 },
-  signupText: { color: colors.textMuted, fontSize: 14 },
-  signupTextBold: { color: colors.primary, fontWeight: "700" },
+  // Same blue as Sign In: registering a restaurant is the other thing this
+  // screen is for, not a footnote under it.
+  signupButton: { marginTop: space.s2 },
+  // A step down from the signup link in both size and weight — the two doors
+  // are not equal, and the screen should say so before either is tapped.
+  joinLink: { alignItems: "center", paddingHorizontal: space.s3 },
+  joinText: { color: colors.textMuted, fontSize: 13 },
+  joinTextBold: { color: colors.textMuted, fontWeight: "700" },
 });

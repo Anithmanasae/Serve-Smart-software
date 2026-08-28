@@ -8,9 +8,9 @@
  *   E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/trialExpiry.e2e.ts
  *
  * The model under test:
- *   - EVERY new restaurant is born a 2-day trial. `trialStartedAt` is stamped
+ *   - EVERY new restaurant is born a 3-day trial. `trialStartedAt` is stamped
  *     by the SERVER (the rule demands it equal request.time), the deadline is
- *     COMPUTED as start + 2 days, and nothing is stored for a client to forge.
+ *     COMPUTED as start + 3 days, and nothing is stored for a client to forge.
  *   - `expiresAt` OVERRIDES that computed deadline. Admin SDK only.
  *   - ACTIVATION = deleting both fields. No fields = permanent.
  *
@@ -75,7 +75,7 @@ const WAITER = `trial-waiter-${stamp}@sada-pos.test`;
 const FORGER = `forger-${stamp}@sada-pos.test`;
 
 /** The trial length in firestore.rules `trialLength()`. Keep in sync. */
-const TRIAL_DAYS = 2;
+const TRIAL_DAYS = 3;
 
 let step = 0;
 function ok(msg: string) {

@@ -9,10 +9,10 @@
     "icon": "./assets/brand/icon.png",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.sada.pos"
+      "bundleIdentifier": "com.smartserve"
     },
     "android": {
-      "package": "com.sada.pos",
+      "package": "com.smartserve",
       "adaptiveIcon": {
         "foregroundImage": "./assets/brand/adaptive-icon.png",
         "backgroundColor": "#00336F"
@@ -21,7 +21,7 @@
         "android.permission.BLUETOOTH_CONNECT",
         "android.permission.BLUETOOTH_SCAN",
         "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -34,7 +34,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Smart Serve to access your photos to set menu item images."
+          "photosPermission": "Allow Smart Serve to access your photos to set menu item images.",
+          "cameraPermission": false,
+          "microphonePermission": false
         }
       ],
       [
@@ -45,7 +47,19 @@
           "backgroundColor": "#00336F"
         }
       ],
-      "expo-audio"
+      [
+        "expo-audio",
+        {
+          "recordAudioAndroid": false,
+          "enableBackgroundPlayback": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#0047A1"
+        }
+      ]
     ],
     "extra": {
       "router": {

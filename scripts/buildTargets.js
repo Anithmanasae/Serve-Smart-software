@@ -25,6 +25,25 @@
  * ADDING A PROFILE: add it here too, or builds of it are only warned about,
  * not verified. `null` means "unverified on purpose" (local dev builds, which
  * take whatever .env.local says).
+ *
+ * ── ONE PACKAGE NAME, AND WHY THAT IS CURRENTLY FINE ────────────────────────
+ *
+ * `app.json` hardcodes a single `expo.android.package` (`com.smartserve`), so
+ * EVERY profile in the table above builds an APK with that identity — Akila's
+ * included. That is survivable only because Akila's build is INTERNAL: sideloaded
+ * APKs sharing a package name merely overwrite each other on a device.
+ *
+ * The moment a second white-label is published to Play, this breaks hard and
+ * unfixably: Google Play keys an app on its package name, one listing per name,
+ * permanently. Two products cannot share one.
+ *
+ * So if a second white-label is ever to be PUBLISHED, the package name has to
+ * become per-target (an app.config.js reading the profile, rather than static
+ * JSON) BEFORE the first upload of either. After the first publish the name is
+ * frozen, so this is not a thing that can be fixed later.
+ *
+ * Note that `com.smartserve` is also the package the Play Billing functions
+ * verify purchases against — see PLAY_PACKAGE_NAME in functions/src/playApi.ts.
  */
 
 /** EAS build profile (eas.json) → the Firebase project id it must resolve to. */

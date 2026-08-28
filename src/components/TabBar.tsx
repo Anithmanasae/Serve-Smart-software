@@ -31,6 +31,7 @@ import { ROLE_ACCESS } from "@/features/auth/roleRoutes";
 import { useResponsive } from "@/lib/responsive";
 import { feel } from "@/lib/feedback";
 import { colors, fonts, radius, space } from "@/theme/theme";
+import type { RestaurantConfig } from "@/features/settings/restaurantConfig";
 import type { Role } from "@/types/models";
 
 type IconName = Extract<keyof typeof MaterialCommunityIcons.glyphMap, string>;
@@ -43,6 +44,15 @@ export interface TabDef {
   /** MaterialCommunityIcons base name; the `-outline` cut is the inactive one. */
   icon: IconName;
   module: keyof typeof ROLE_ACCESS;
+  /**
+   * Does this restaurant's setup include this module at all? Absent = always.
+   *
+   * Role says who MAY use a module; this says whether the module EXISTS here.
+   * A quick-billing café has no kitchen display for anyone, and a food truck
+   * has no floor — showing either as a tab the role happens to be allowed on
+   * would be a button leading to a screen with nothing in it.
+   */
+  requires?: (config: RestaurantConfig) => boolean;
 }
 
 /**
@@ -59,14 +69,48 @@ export interface TabDef {
 export const TABS: readonly TabDef[] = [
   { name: "insights", href: "/insights", title: "Insights", icon: "chart-box", module: "insights" },
   { name: "menu", href: "/menu", title: "Menu", icon: "food", module: "menuAdmin" },
-  { name: "tables", href: "/tables", title: "Tables", icon: "view-grid", module: "tables" },
+  {
+    name: "tables",
+    href: "/tables",
+    title: "Tables",
+    icon: "view-grid",
+    module: "tables",
+    requires: (c) => c.tablesEnabled,
+  },
   { name: "order/index", href: "/order", title: "Order", icon: "cart", module: "order" },
-  { name: "kds", href: "/kds", title: "KDS", icon: "pot-steam", module: "kds" },
+  {
+    name: "kds",
+    href: "/kds",
+    title: "KDS",
+    icon: "pot-steam",
+    module: "kds",
+    requires: (c) => c.kotEnabled,
+  },
   { name: "bills", href: "/bills", title: "Bills", icon: "receipt-text", module: "bills" },
 ];
 
-export const canSeeTab = (tab: TabDef, role: Role) =>
-  ROLE_ACCESS[tab.module].includes(role);
+/**
+ * Two independent questions, and both must say yes: does this restaurant HAVE
+ * the module, and is this ROLE allowed in it?
+ *
+ * The `kitchen` exemption is the one place they cross. A restaurant that
+ * turned kitchen tickets off has no KDS — but if it still has a kitchen
+ * account (joined before the switch, or approved by mistake), hiding the
+ * board would leave that login with no screen in the entire app and nowhere
+ * for `homePathForRole` to send it. An empty board is honest; a dead end is
+ * not.
+ */
+export const canSeeTab = (
+  tab: TabDef,
+  role: Role,
+  config: RestaurantConfig
+): boolean => {
+  if (!ROLE_ACCESS[tab.module].includes(role)) return false;
+  // The kitchen keeps its board even where the restaurant switched tickets
+  // off — see above. Every other module obeys the setup answers.
+  if (tab.module === "kds" && role === "kitchen") return true;
+  return tab.requires?.(config) ?? true;
+};
 
 /** M3: a 32dp-tall indicator, 64 wide in a bar and 56 in the narrower rail. */
 const INDICATOR_H = 32;
@@ -75,18 +119,32 @@ const INDICATOR_W_RAIL = 56;
 /** M3 navigation rail is 80dp wide. */
 const RAIL_W = 80;
 
+/**
+ * How much room the bar takes, ABOVE the safe-area inset it also pads for.
+ *
+ * Exported because anything floating over the tabs has to clear it and there
+ * is no measured height to ask for — `useBottomTabBarHeight` only answers
+ * inside a tab screen, and the coach sits beside the navigator rather than in
+ * it. Derived from the styles below (`paddingTop` + indicator + gap + label +
+ * `paddingBottom`), so it moves when they do.
+ */
+export const TAB_BAR_CONTENT_H = space.s2 + INDICATOR_H + space.s1 + 14 + space.s2;
+
+/** How much room the tablet rail takes on the leading edge. */
+export const TAB_RAIL_W = RAIL_W;
+
 /** `order/[tableId]` → `order`. A route's module is its first segment. */
 function firstSegment(routeName: string): string {
   return routeName.split("/")[0];
 }
 
 export function TabBar({ state, navigation, insets }: BottomTabBarProps) {
-  const { profile } = useAuth();
+  const { profile, config } = useAuth();
   const { isTablet } = useResponsive();
   if (!profile) return null;
 
   const rail = isTablet;
-  const items = TABS.filter((tab) => canSeeTab(tab, profile.role))
+  const items = TABS.filter((tab) => canSeeTab(tab, profile.role, config))
     // A tab the navigator doesn't know about can't be navigated to. Guards the
     // gap between this array and the route files if one is ever renamed.
     .map((tab) => ({ tab, route: state.routes.find((r) => r.name === tab.name) }))

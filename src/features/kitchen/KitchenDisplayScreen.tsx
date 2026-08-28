@@ -39,6 +39,7 @@ import { colors, fonts, radius, space } from "@/theme/theme";
 import { BrandHeader } from "@/components/BrandHeader";
 import { Bone, Skeleton } from "@/components/Skeleton";
 import { ProfileButton } from "@/components/ProfileButton";
+import { EmptyState } from "@/components/EmptyState";
 import type { Kot } from "@/types/models";
 import { groupActiveKots, type LiveKot } from "./groupKots";
 import { NewKotAlertBanner, useNewKotAlerts } from "./newKotAlerts";
@@ -50,8 +51,8 @@ const GAP = space.s3;
 type Tab = "orders" | "takeaway";
 
 const EMPTY_COPY: Record<Tab, string> = {
-  orders: "No active tickets — new KOTs appear here instantly.",
-  takeaway: "No takeaway orders in the kitchen right now.",
+  orders: "New kitchen tickets land here the moment a waiter sends one, with a chime.",
+  takeaway: "Counter and takeaway tickets appear here as they are sent.",
 };
 
 /**
@@ -161,9 +162,20 @@ export function KitchenDisplayScreen() {
       ) : activeState.loading ? (
         <BoardSkeleton cols={cols} />
       ) : visible.length === 0 ? (
+        // "Nothing here." was accurate and read as a fault. A quiet pass is
+        // good news on this screen, so it gets the calm tone and no button —
+        // there is nothing for a cook to do about an empty board.
         <View style={styles.center}>
-          <Text style={styles.emptyText}>Nothing here.</Text>
-          <Text style={styles.emptySub}>{EMPTY_COPY[tab]}</Text>
+          <EmptyState
+            icon={tab === "takeaway" ? "bag-personal-outline" : "pot-steam"}
+            tone="calm"
+            title={
+              tab === "takeaway"
+                ? "No takeaway tickets right now"
+                : "The pass is clear"
+            }
+            body={EMPTY_COPY[tab]}
+          />
         </View>
       ) : (
         <ScrollView
