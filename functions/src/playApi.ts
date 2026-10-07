@@ -19,7 +19,12 @@
  * Permission changes in Play Console can take up to 24 hours to take effect.
  * A 401 the day you set it up is usually just that, not a wrong key.
  */
-import { google, androidpublisher_v3 } from "googleapis";
+// TYPE-ONLY, and that is load-bearing. `googleapis` is enormous — every Google
+// API in one package — and importing it at the top of the file made this
+// module take longer to load than the ten seconds `firebase deploy` allows
+// while it works out what to deploy. The real import is inside `publisher()`,
+// so it is paid for on the first Play lookup instead of at load.
+import type { androidpublisher_v3 } from "googleapis";
 import { defineString } from "firebase-functions/params";
 
 /**
@@ -49,6 +54,7 @@ let client: androidpublisher_v3.Androidpublisher | null = null;
 
 async function publisher(): Promise<androidpublisher_v3.Androidpublisher> {
   if (client) return client;
+  const { google } = await import("googleapis");
   const auth = new google.auth.GoogleAuth({
     scopes: ["https://www.googleapis.com/auth/androidpublisher"],
   });
