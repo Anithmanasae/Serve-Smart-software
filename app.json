@@ -59,7 +59,8 @@
         {
           "color": "#0047A1"
         }
-      ]
+      ],
+      "expo-iap"
     ],
     "extra": {
       "router": {

@@ -43,6 +43,8 @@ export interface PurchaseRecord {
   productId: string;
   /** Play's own state string, for support. */
   state: string;
+  /** Whether Play said this token keeps the restaurant open. */
+  entitled: boolean;
   expiresAtMs: number | null;
   updatedAt: FirebaseFirestore.FieldValue;
 }
@@ -64,6 +66,36 @@ export async function restaurantForToken(
 ): Promise<string | null> {
   const snap = await db().collection(PURCHASES).doc(purchaseToken).get();
   return snap.exists ? ((snap.data()?.restaurantId as string) ?? null) : null;
+}
+
+/**
+ * Is some OTHER purchase still paying for this restaurant?
+ *
+ * One restaurant collects several tokens over its life: Play issues a new one
+ * when an owner resubscribes after a lapse, or buys again from a new phone.
+ * The old token does not go quiet — it still gets its own EXPIRED or REVOKED
+ * notification, sometimes weeks later. Without this check that stale
+ * notification writes a date in the past over a restaurant that is paid up
+ * on the newer token, and a paying customer is locked out by their own
+ * history.
+ *
+ * So news that ENDS access is only believed when no other token is live.
+ * News that extends it needs no such check: a later date is never wrong.
+ */
+export async function hasOtherLivePurchase(
+  restaurantId: string,
+  purchaseToken: string,
+): Promise<boolean> {
+  const snap = await db()
+    .collection(PURCHASES)
+    .where("restaurantId", "==", restaurantId)
+    .get();
+  const now = Date.now();
+  return snap.docs.some((d) => {
+    if (d.id === purchaseToken) return false;
+    const p = d.data() as Partial<PurchaseRecord>;
+    return p.entitled === true && (p.expiresAtMs ?? 0) > now;
+  });
 }
 
 /**

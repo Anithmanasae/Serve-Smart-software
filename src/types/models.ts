@@ -120,25 +120,28 @@ export interface RestaurantProfile {
    */
   needsSetup?: boolean;
   /**
-   * SELF-SERVE TRIALS. Stamped by the SERVER at registration — the create rule
-   * demands `trialStartedAt == request.time`, which only a serverTimestamp()
-   * sentinel satisfies, so a client can neither backdate nor omit it. The
-   * deadline is COMPUTED as `trialStartedAt + 3 days` in firestore.rules
-   * (`trialLength()`), never stored, so there is nothing to tamper with.
+   * DEAD FIELD — kept only so old documents still type-check.
    *
-   * Every new restaurant has this. Activating a paying customer DELETES it.
+   * It used to start the 3-day self-serve trial: the create rule demanded
+   * `trialStartedAt == request.time` and the deadline was computed from it.
+   * THERE IS NO TRIAL ANY MORE. Nothing reads this — not the rules, not
+   * AuthContext — and the create rule now REJECTS it, so no new restaurant
+   * can have one. Restaurants registered under the old build still carry the
+   * stamp; ignoring it is exactly what stops them from locking out.
+   *
+   * Do not read it, and do not write it. `scripts/stripLegacyTrials.js`
+   * removes it from existing documents.
    */
   trialStartedAt?: Ts;
   /**
-   * An explicit deadline that OVERRIDES the computed one — a custom trial
-   * length, or a subscription's paid-through date. Written only through the
-   * Admin SDK; no client can set, change or clear it. The writers are the
-   * Play Billing functions in `functions/` (automatic — renewals push this
-   * forward, refunds push it into the past) and `scripts/activateTenant.js`
-   * (manual). See CLAUDE.md.
+   * THE ONLY DEADLINE. A subscription's paid-through date, or a manual
+   * lockout. Written only through the Admin SDK; no client can set, change or
+   * clear it. The writers are the Play Billing functions in `functions/`
+   * (automatic — renewals push this forward, refunds push it into the past)
+   * and `scripts/activateTenant.js` (manual). See CLAUDE.md.
    *
-   * ABSENT trialStartedAt AND expiresAt = NEVER EXPIRES. Real customers have
-   * neither field and are entirely unaffected by the expiry rules.
+   * ABSENT = NEVER EXPIRES, which is now the ordinary case: a new restaurant
+   * is born without it and is entirely unaffected by the expiry rules.
    */
   expiresAt?: Ts;
   updatedAt: Ts;
@@ -175,6 +178,18 @@ export interface AppUser {
   status: UserStatus;
   active: boolean;
   photoUrl?: string;
+  /**
+   * The owner's mobile number in E.164 (`+919876543210`) — collected on the
+   * signup screen, India only (see `features/auth/phone.ts` for why there is
+   * no country picker).
+   *
+   * OPTIONAL, and it has to stay optional: every restaurant registered before
+   * the field existed carries no phone, and staff who join with a code are
+   * never asked for one — the number is how we reach the person who pays, and
+   * that is the owner. Absent means "never collected", so nothing may treat
+   * its absence as a bad number.
+   */
+  phone?: string;
   /** On staff self-signup: the join code the person entered. The rules verify
    *  it against the restaurant's real code, so knowing the code is enforced
    *  server-side — a client can't plant a pending profile in a restaurant

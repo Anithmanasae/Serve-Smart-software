@@ -15,17 +15,33 @@ import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { BrandLogo } from "@/components/BrandLogo";
 import { DEMO_MODE, FIREBASE_PROJECT_ID } from "@/lib/firebase";
+import { AuthDivider, GoogleButton } from "@/features/auth/GoogleButton";
+import { isGoogleAuthAvailable } from "@/lib/googleAuth";
 import { feel } from "@/lib/feedback";
 // ONBOARDING_PREVIEW (temporary — see PreviewOnboardingButton for how to remove)
 import { PreviewOnboardingButton } from "@/features/onboarding/PreviewOnboardingButton";
 import { colors, space, radius } from "@/theme/theme";
 
+/**
+ * Sign in.
+ *
+ * "Continue with Google" is here for the same reason it is on `/signup`, and
+ * it is NOT optional: an owner who registered with Google has no password at
+ * all, so a login screen offering only email and password is a door they hold
+ * no key to. It signs people in and creates nothing — a Google account with no
+ * restaurant behind it is bounced with the same "not linked" notice an email
+ * login gets, rather than quietly being handed a new workspace.
+ */
 export default function Login() {
-  const { signIn, profile, gate, notice, config } = useAuth();
+  const { signIn, signInWithGoogle, profile, gate, notice, config } = useAuth();
+  const googleAvailable = isGoogleAuthAvailable();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Which sign-in is running — see the same note on the signup screen. Both
+  // buttons go quiet while either works; only the pressed one changes label.
+  const [pending, setPending] = useState<null | "email" | "google">(null);
+  const busy = pending !== null;
 
   // Already signed in → go to role home.
   if (profile) return <Redirect href={homePathForRole(profile.role, config)} />;
@@ -39,7 +55,7 @@ export default function Login() {
       return;
     }
     setError(null);
-    setBusy(true);
+    setPending("email");
     try {
       await signIn(email.trim(), password);
       feel.success(); // the redirect is instant — this is the only "you're in"
@@ -49,7 +65,22 @@ export default function Login() {
       feel.error();
       setError(friendlyAuthError(e));
     } finally {
-      setBusy(false);
+      setPending(null);
+    }
+  }
+
+  async function onGoogle() {
+    setError(null);
+    setPending("google");
+    try {
+      const signedIn = await signInWithGoogle();
+      // Backed out of the account picker — a decision, not a failure.
+      if (signedIn) feel.success();
+    } catch (e) {
+      feel.error();
+      setError(friendlyAuthError(e));
+    } finally {
+      setPending(null);
     }
   }
 
@@ -80,6 +111,23 @@ export default function Login() {
         </View>
 
         <View style={styles.form}>
+          {/* Above the fields, not below the Sign In button: an owner who
+              registered with Google has nothing to type here, and making them
+              scan past two text boxes to find that out is asking them to
+              consider a form that isn't theirs. Absent on a build without the
+              native module or a client id — then this is the plain email
+              screen it has always been. */}
+          {googleAvailable && (
+            <>
+              <GoogleButton
+                busy={pending === "google"}
+                disabled={busy}
+                onPress={onGoogle}
+              />
+              <AuthDivider />
+            </>
+          )}
+
           <Text style={styles.label}>Email</Text>
           <TextInput
             style={styles.input}
@@ -113,15 +161,15 @@ export default function Login() {
             disabled={busy}
           >
             <Text style={styles.buttonText}>
-              {busy ? "Signing in…" : "Sign In"}
+              {pending === "email" ? "Signing in…" : "Sign In"}
             </Text>
           </Pressable>
 
-          {/* Open in EVERY build. Self-signup IS the trial: registering a new
-              restaurant starts a server-stamped 3-day clock, so one APK can be
-              handed to any number of prospects and each gets their own private
-              workspace. Hiding this used to be the demo build's whole job;
-              enforcement now lives in firestore.rules, where it belongs. */}
+          {/* Open in EVERY build. Registering creates a private workspace, so
+              one APK can be handed to any number of prospects. It no longer
+              starts a clock — there is no free trial, and the copy must not
+              promise one (see "THERE IS NO FREE TRIAL" in CLAUDE.md). Hiding
+              this used to be the demo build's whole job. */}
           <Pressable
             style={({ pressed }) => [
               styles.button,
@@ -133,7 +181,7 @@ export default function Login() {
             onPressIn={feel.press}
             disabled={busy}
           >
-            <Text style={styles.buttonText}>Start a free 3-day trial</Text>
+            <Text style={styles.buttonText}>Create your restaurant</Text>
           </Pressable>
 
           {/* The staff door, deliberately quieter than the one above it.

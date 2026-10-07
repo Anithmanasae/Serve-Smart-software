@@ -11,7 +11,7 @@
  * The load-bearing decisions:
  *
  * - **AsyncStorage, not module state.** Between the last card of the tour and
- *   the "Start my 3-day free trial" button there is a five-field form, and
+ *   the "Create my restaurant" button there is a five-field form, and
  *   people leave a signup form — to fetch a password, to answer a message. On
  *   Android that is a process that can be killed. Answers held in a variable
  *   would be gone on the way back and the owner would be asked the same three

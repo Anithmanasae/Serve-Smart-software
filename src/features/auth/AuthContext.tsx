@@ -19,24 +19,25 @@
  * — no app restart needed. `profile` is only non-null for a usable account
  * (approved + active); every other signed-in state is described by `gate`.
  *
- * TRIAL EXPIRY: the deadline is resolved from TWO documents, and the earlier of
- * them wins:
+ * EXPIRY: there is NO free trial — a new restaurant never expires. The only
+ * deadline is an explicit `expiresAt`, set through the Admin SDK
+ * (scripts/activateTenant.js, or the Play Billing functions). It is resolved
+ * from TWO documents, and the earlier of them wins:
  *
- *   the RESTAURANT   restaurants/{rid}   trialStartedAt (+2d) or expiresAt
+ *   the RESTAURANT   restaurants/{rid}   expiresAt
  *   the ACCOUNT      users/{uid}         expiresAt
  *
- * The restaurant doc is the important one. Every new restaurant is born a
- * 3-day trial and its whole staff is gated by that single field — a waiter who
- * joined with a join code carries no expiry of their own, so reading only the
- * user profile would leave them looking fine on the client while every query
- * failed server-side. Both docs are watched live, and the root doc stays
- * readable after expiry (rules: `isMember()`, no expiry check) precisely so
- * this screen can explain itself.
+ * The restaurant doc is the important one. A whole staff is gated by that
+ * single field — a waiter who joined with a join code carries no expiry of
+ * their own, so reading only the user profile would leave them looking fine on
+ * the client while every query failed server-side. Both docs are watched live,
+ * and the root doc stays readable after expiry (rules: `isMember()`, no expiry
+ * check) precisely so this screen can explain itself.
  *
  * Because expiry is a clock event rather than a write, no snapshot fires at the
  * deadline — a timer does the work (see the expiry effect below), flipping
- * `gate` to "expired". A restaurant with NO trial fields never expires; that is
- * what activating a paying customer produces.
+ * `gate` to "expired". A restaurant with NO expiresAt never expires; that is
+ * both the ordinary case and what activating a paying customer produces.
  */
 import {
   createContext,
@@ -46,7 +47,9 @@ import {
   type ReactNode,
 } from "react";
 import {
+  GoogleAuthProvider,
   onAuthStateChanged,
+  signInWithCredential,
   signInWithEmailAndPassword,
   signOut as fbSignOut,
   type User,
@@ -56,31 +59,40 @@ import { getDoc, onSnapshot } from "firebase/firestore";
 import { auth, RESTAURANT_ID } from "@/lib/firebase";
 import { paths, setActiveRestaurantId } from "@/lib/firestore/paths";
 import {
+  AWAITING_SUBSCRIPTION_MS,
   isSignupInProgress,
   joinRestaurant,
   registerRestaurant,
+  registerRestaurantWithGoogle,
   type SignupRole,
 } from "@/features/auth/signupApi";
+import {
+  forgetGoogleAccount,
+  // Aliased: this context exports its OWN `signInWithGoogle`, which is the
+  // Google picker AND the Firebase credential exchange. The import is only the
+  // first half of that.
+  signInWithGoogle as googleAccountPicker,
+} from "@/lib/googleAuth";
 import {
   resolveRestaurantConfig,
   type RestaurantConfig,
 } from "@/features/settings/restaurantConfig";
+import { AuthMessageError } from "@/features/auth/authErrors";
+import { isBillingAvailable } from "@/lib/billing";
 import type { AppUser, RestaurantProfile, Role } from "@/types/models";
 
 export type { SignupRole };
-
-/** Trial length. MUST match `trialLength()` in firestore.rules — the rules are
- *  what actually enforce it; this only drives the countdown and the screen. */
-const TRIAL_DAYS = 3;
-const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
 const NOT_LINKED_MESSAGE =
   "This account isn't linked to any restaurant. Sign up again with your " +
   "restaurant's join code, or contact support.";
 
-const TRIAL_ENDED_MESSAGE =
-  "Your free trial has ended. Thanks for trying Smart Serve — get in touch to " +
-  "activate your restaurant and keep everything you've set up.";
+// Shown when an `expiresAt` deadline passes. That is no longer a trial running
+// out — there is no trial — but a subscription lapsing or a manual lockout, so
+// the copy names neither and stays true of both.
+const ACCESS_ENDED_MESSAGE =
+  "Your access to Smart Serve has ended. Everything you set up is still " +
+  "saved — get in touch to reactivate your restaurant.";
 
 /** setTimeout stores its delay in a signed 32-bit int; anything larger
  *  overflows and fires IMMEDIATELY. Re-arm in chunks no bigger than this. */
@@ -102,12 +114,40 @@ function devFallbackRestaurantId(): string | null {
 }
 
 /**
+ * Surface "this login belongs to no restaurant" as an error the sign-in screen
+ * can show, instead of a silent bounce a second later.
+ *
+ * Shared by both sign-in methods, and it matters MORE for Google than for a
+ * password: signing in with Google is one tap and creates the Firebase account
+ * as a side effect, so the wrong tap (Google on `/login` before ever
+ * registering) otherwise leaves someone staring at a login screen that just
+ * flashed and did nothing.
+ *
+ * The index listener above races to the same conclusion, so a read that fails
+ * because it already signed us out is tolerated.
+ */
+async function assertLinkedOrSignOut(uid: string): Promise<void> {
+  try {
+    const idx = await getDoc(paths.userIndex(uid));
+    if (!idx.exists() && !devFallbackRestaurantId()) {
+      await fbSignOut(auth).catch(() => {});
+      throw new AuthMessageError(NOT_LINKED_MESSAGE);
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message === NOT_LINKED_MESSAGE) throw e;
+    if (!auth.currentUser) throw new AuthMessageError(NOT_LINKED_MESSAGE);
+    // Index unreadable but still signed in (offline blip) — let the listener
+    // sort it out.
+  }
+}
+
+/**
  * Why a signed-in user is NOT allowed into the app:
  *  - pending    signup awaiting the cashier's approval
  *  - denied     cashier rejected the signup
  *  - restricted approved account switched off for now (day off / suspended)
  *  - removed    profile deleted — account permanently revoked
- *  - expired    time-limited trial account whose deadline has passed
+ *  - expired    account or workspace whose `expiresAt` deadline has passed
  * null when signed out or fully usable.
  */
 export type GateStatus =
@@ -124,14 +164,14 @@ interface AuthState {
   role: Role | null;
   /** The restaurant this login belongs to (null until resolved / signed out). */
   restaurantId: string | null;
-  /** Its display name — readable even once expired, so the "trial ended"
-   *  screen can name the restaurant it's talking about. */
+  /** Its display name — readable even once expired, so the lockout screen
+   *  can name the restaurant it's talking about. */
   restaurantName: string | null;
   /**
    * The restaurant root doc itself, live — the receipt header, the join code,
    * the wizard's answers and the activation marker.
    *
-   * Exposed because this subscription already exists for the trial clock, so
+   * Exposed because this subscription already exists for the expiry clock, so
    * a reader that needs one more field off this document costs nothing;
    * opening a second listener on the busiest doc in the restaurant to read a
    * field this one already has would be the expensive way to ask.
@@ -142,7 +182,7 @@ interface AuthState {
   restaurant: RestaurantProfile | null;
   /**
    * How this restaurant works — the setup wizard's answers, live. Derived
-   * from the same root-doc subscription as the trial clock, so it costs no
+   * from the same root-doc subscription as the expiry clock, so it costs no
    * extra listener and every device re-shapes the moment an answer changes.
    *
    * Defaults to kitchen-tickets-on / tables-on for every restaurant that
@@ -164,9 +204,18 @@ interface AuthState {
    * it grants nothing, and `role` remains the one that gates behaviour.
    */
   gatedRole: Role | null;
-  /** When this workspace stops working (ms epoch), or null if it never does.
-   *  Drives the countdown banner; NOT the enforcement (that's firestore.rules). */
-  trialEndsAt: number | null;
+  /** When this workspace stops working (ms epoch), or null if it never does —
+   *  which, with no free trial, is the ordinary case. Drives the countdown
+   *  banner; NOT the enforcement (that's firestore.rules). */
+  accessEndsAt: number | null;
+  /**
+   * This restaurant has never had a subscription — it was born locked and its
+   * owner has not yet been through the paywall. Distinct from a subscription
+   * that lapsed, and the gate screens must not confuse the two: telling
+   * someone who registered thirty seconds ago that their "access has ended"
+   * is both false and a bad way to ask for a card.
+   */
+  awaitingSubscription: boolean;
   loading: boolean;
   /** Set when the app had to force-sign-out (e.g. account not linked to a
    *  restaurant) — the login screen shows it. */
@@ -177,7 +226,33 @@ interface AuthState {
     ownerName: string,
     email: string,
     password: string,
+    /** Owner's mobile in E.164 (`+91…`), from the signup screen. Optional
+     *  here for the same reason it is optional in signupApi: the e2e suites
+     *  register restaurants without one. */
+    phone?: string,
   ) => Promise<void>;
+  /**
+   * The same registration, opened with a Google account instead of a password.
+   *
+   * Resolves `false` if the owner backed out of Google's account picker —
+   * nothing happened and the screen says nothing. `phone` is collected on the
+   * screen BEFORE the picker opens, because Google supplies a person and this
+   * app needs a restaurant and a number to ring.
+   */
+  registerRestaurantWithGoogle: (
+    restaurantName: string,
+    phone?: string,
+  ) => Promise<boolean>;
+  /**
+   * Sign an EXISTING owner back in with Google. Resolves `false` on cancel.
+   *
+   * The counterpart to `registerRestaurantWithGoogle`, and not optional: an
+   * owner who registered with Google has no password, so without this the
+   * login screen is a door they have no key to. It creates nothing — an
+   * account with no `userIndex` is bounced with NOT_LINKED_MESSAGE exactly
+   * like an email login that never belonged anywhere.
+   */
+  signInWithGoogle: () => Promise<boolean>;
   joinRestaurant: (
     joinCode: string,
     name: string,
@@ -194,7 +269,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
   const [rawProfile, setRawProfile] = useState<AppUser | null>(null);
-  // The restaurant root doc — watched for its trial fields (see the expiry
+  // The restaurant root doc — watched for its `expiresAt` (see the expiry
   // section below). Readable even by an expired member, by design.
   const [restaurantDoc, setRestaurantDoc] = useState<RestaurantProfile | null>(
     null,
@@ -395,7 +470,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           },
         );
 
-        // The workspace's trial clock. Live, because activation is a WRITE to
+        // The workspace's expiry clock. Live, because activation is a WRITE to
         // this doc — the moment the owner is activated, every signed-in device
         // in the restaurant unblocks without a restart.
         unsubRestaurant?.();
@@ -467,30 +542,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // ── trial expiry ────────────────────────────────────────────────────────────
+  // ── expiry ────────────────────────────────────────────────────────────────
   // Expiry is a CLOCK event, not a data change. The profile listener above is
   // an onSnapshot — it fires on WRITES, and nothing writes to the doc at the
-  // deadline, so a live subscription alone would leave a trial device happily
-  // working until some unrelated write happened to land. Hence a timer.
+  // deadline, so a live subscription alone would leave a locked-out device
+  // happily working until some unrelated write happened to land. Hence a timer.
   //
   // This is UX only. The real gate is firestore.rules against request.time (the
   // server clock). If the prospect rolls the device date back, this timer just
   // won't fire early — every query still fails server-side, so nothing is
   // extended; they simply see errors instead of the friendly screen.
   //
-  // No trial fields = permanent = never expires. Never written as "expiresAt
-  // must be in the future" — that form would lock out every paying customer.
+  // No expiresAt = permanent = never expires. Never written as "expiresAt must
+  // be in the future" — that form would lock out every paying customer.
   //
-  // Mirrors firestore.rules exactly. On the RESTAURANT an explicit expiresAt
-  // overrides the computed trial deadline (`tenantNotExpired`); on the ACCOUNT
-  // expiresAt stands alone (`selfNotExpired`). Either level can close the app,
-  // so the EARLIER of the two wins — and null at a level means that level
-  // imposes no deadline at all.
-  const tenantEndsAt =
-    restaurantDoc?.expiresAt?.toMillis() ??
-    (restaurantDoc?.trialStartedAt
-      ? restaurantDoc.trialStartedAt.toMillis() + TRIAL_MS
-      : null);
+  // THERE IS NO TRIAL CLOCK. This used to fall back to
+  // `trialStartedAt + TRIAL_MS` when the restaurant carried no explicit
+  // deadline, mirroring a `trialLength()` the rules no longer have. Both sides
+  // dropped it together: reviving it here alone would show a countdown, and
+  // then a lockout screen, for a workspace the server would happily keep
+  // serving. Legacy docs still carry `trialStartedAt`; it is deliberately not
+  // read.
+  //
+  // Mirrors firestore.rules exactly. Either level can close the app, so the
+  // EARLIER of the two wins — and null at a level means that level imposes no
+  // deadline at all:
+  //   tenant  restaurants/{rid}.expiresAt   (`tenantNotExpired`)
+  //   account users/{uid}.expiresAt         (`selfNotExpired`)
+  const tenantEndsAt = restaurantDoc?.expiresAt?.toMillis() ?? null;
   const accountEndsAt = rawProfile?.expiresAt?.toMillis() ?? null;
   const expiresAtMs =
     tenantEndsAt === null
@@ -537,10 +616,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // restaurant doc, so a device that stays signed in unblocks by itself the
   // moment the owner pays. The notice is staged anyway, so it still explains
   // things if they sign out by hand from that screen.
+  const awaitingSubscription = tenantEndsAt === AWAITING_SUBSCRIPTION_MS;
+
   useEffect(() => {
-    if (!expired || !firebaseUser) return;
-    setNotice(TRIAL_ENDED_MESSAGE);
-  }, [expired, firebaseUser]);
+    // Nothing has ENDED for a restaurant that has not started yet.
+    if (!expired || !firebaseUser || awaitingSubscription) return;
+    setNotice(ACCESS_ENDED_MESSAGE);
+  }, [expired, firebaseUser, awaitingSubscription]);
 
   const usable =
     rawProfile !== null &&
@@ -554,7 +636,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * app's shape is read off. Both must have answered before anything renders:
    * see `restaurantAnswered`. Used for the gate as well as the exported
    * `loading`, because the gate itself is decided partly from the restaurant
-   * doc (the tenant's trial deadline lives there).
+   * doc (the tenant's deadline lives there).
    */
   const resolving = loading || (!!firebaseUser && !restaurantAnswered);
 
@@ -562,7 +644,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   if (firebaseUser && !resolving && !profile) {
     if (expired && rawProfile !== null) {
       // Wins over every other reason: the account is approved and active, it's
-      // the trial that ran out. Shown in the window before sign-out lands, and
+      // the deadline that passed. Shown in the window before sign-out lands, and
       // as the fallback if sign-out fails (e.g. offline).
       gate = "expired";
     } else if (rawProfile === null) {
@@ -586,37 +668,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     config: resolveRestaurantConfig(restaurantDoc),
     gate,
     gatedRole: rawProfile?.role ?? null,
-    trialEndsAt: expiresAtMs,
+    accessEndsAt: expiresAtMs,
+    awaitingSubscription,
     loading: resolving,
     notice,
     signIn: async (email, password) => {
       setNotice(null);
       const cred = await signInWithEmailAndPassword(auth, email, password);
-      // Surface "not linked" as a login error instead of a silent bounce.
-      // (The index listener above races to the same conclusion; tolerate its
-      // sign-out making this read fail.)
-      try {
-        const idx = await getDoc(paths.userIndex(cred.user.uid));
-        if (!idx.exists() && !devFallbackRestaurantId()) {
-          await fbSignOut(auth).catch(() => {});
-          throw new Error(NOT_LINKED_MESSAGE);
-        }
-      } catch (e) {
-        if (e instanceof Error && e.message === NOT_LINKED_MESSAGE) throw e;
-        if (!auth.currentUser) throw new Error(NOT_LINKED_MESSAGE);
-        // Index unreadable but still signed in (offline blip) — let the
-        // listener sort it out.
-      }
+      await assertLinkedOrSignOut(cred.user.uid);
     },
-    registerRestaurant: async (restaurantName, ownerName, email, password) => {
+    signInWithGoogle: async () => {
       setNotice(null);
-      await registerRestaurant(restaurantName, ownerName, email, password);
+      const account = await googleAccountPicker();
+      if (!account) return false; // backed out — nothing to say
+      const cred = await signInWithCredential(
+        auth,
+        GoogleAuthProvider.credential(account.idToken),
+      );
+      await assertLinkedOrSignOut(cred.user.uid);
+      return true;
+    },
+    registerRestaurant: async (
+      restaurantName,
+      ownerName,
+      email,
+      password,
+      phone,
+    ) => {
+      setNotice(null);
+      // Born locked ONLY when this build can sell the way out. Decided here
+      // and not in signupApi, which must stay free of native modules.
+      await registerRestaurant(restaurantName, ownerName, email, password, phone, {
+        awaitSubscription: isBillingAvailable(),
+      });
+    },
+    registerRestaurantWithGoogle: async (restaurantName, phone) => {
+      setNotice(null);
+      // The picker lives HERE rather than in signupApi: it is a native module,
+      // and signupApi is imported by the e2e suites, which run under plain
+      // Node. See the note on registerRestaurantWithGoogle in that file.
+      const account = await googleAccountPicker();
+      if (!account) return false; // backed out — nothing happened
+      await registerRestaurantWithGoogle(account, restaurantName, phone, {
+        awaitSubscription: isBillingAvailable(),
+      });
+      return true;
     },
     joinRestaurant: async (joinCode, name, email, password, role) => {
       setNotice(null);
       await joinRestaurant(joinCode, name, email, password, role);
     },
     signOut: async () => {
+      // Drop Google's cached account too, or the next person at a shared
+      // tablet taps "Continue with Google" and is signed straight back in as
+      // the person who just left, with no picker in between. Best effort, and
+      // deliberately BEFORE the Firebase sign-out so a failure here cannot
+      // leave someone still signed in.
+      await forgetGoogleAccount();
       await fbSignOut(auth);
     },
   };

@@ -28,8 +28,8 @@
  *
  * ## Degrades to nothing
  *
- * Until `expo-iap` is installed AND `EXPO_PUBLIC_PLAY_SUBSCRIPTION_ID` is set,
- * `isBillingAvailable()` is false and every screen falls back to the existing
+ * Until the APK contains `expo-iap` AND `EXPO_PUBLIC_PLAY_SUBSCRIPTION_ID` is
+ * set, `isBillingAvailable()` is false and every screen falls back to the existing
  * "contact us to activate" path. Shipping this file changes no behaviour.
  */
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -56,6 +56,10 @@ export interface VerifyResult {
   expiresAt: number | null;
   /** Present when ok is false — safe to show the owner. */
   reason?: string;
+  /** Play took the order but has not been paid yet (cash, a slow transfer).
+   *  Not a failure and not an unlock: the server finishes it from Google's
+   *  notification when the money lands, with no further tap from the owner. */
+  pending?: boolean;
 }
 
 /**
@@ -95,6 +99,16 @@ async function verifyAndAcknowledge(
   p: PurchaseResult,
   restaurantId: string,
 ): Promise<VerifyResult> {
+  // Nothing to verify yet, and acknowledging an unpaid order is an error.
+  if (p.pending) {
+    return {
+      ok: false,
+      pending: true,
+      expiresAt: null,
+      reason:
+        "Google Play is waiting for your payment to complete. Your restaurant unlocks by itself as soon as it does.",
+    };
+  }
   const res = await verifyCallable()({
     purchaseToken: p.purchaseToken,
     productId: p.productId,
@@ -138,7 +152,7 @@ export async function restore(restaurantId: string): Promise<VerifyResult | null
   if (!isBillingAvailable()) return null;
   const existing = await getExistingPurchases();
   for (const p of existing) {
-    if (p.productId !== SUBSCRIPTION_ID) continue;
+    if (p.productId !== SUBSCRIPTION_ID || p.pending) continue;
     try {
       const res = await verifyAndAcknowledge(p, restaurantId);
       if (res.ok) return res;

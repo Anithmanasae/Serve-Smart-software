@@ -1,15 +1,21 @@
 /**
- * ACTIVATE A PAYING CUSTOMER — turn a trial restaurant permanent.
+ * ACTIVATE A PAYING CUSTOMER — turn a locked-out restaurant permanent.
  *
- * Activation is the DELETION of two fields from the restaurant root doc:
+ * Activation is the DELETION of the deadline from the restaurant root doc:
  *
- *   trialStartedAt   the server-stamped start of the 2-day self-serve trial
- *   expiresAt        an explicit deadline that overrides the computed one
+ *   expiresAt        the only field that can expire a workspace
+ *   trialStartedAt   a DEAD stamp from the removed self-serve trial; cleared
+ *                    at the same time purely so the doc reads honestly
  *
- * firestore.rules treats "neither field present" as NEVER EXPIRES, so removing
- * them makes the tenant indistinguishable from one that was never on a trial.
- * There is deliberately no `isPaid` flag to set: absence cannot drift out of
- * sync with reality, a boolean can.
+ * firestore.rules treats "no expiresAt" as NEVER EXPIRES, so removing it makes
+ * the tenant indistinguishable from one that was never locked. There is
+ * deliberately no `isPaid` flag to set: absence cannot drift out of sync with
+ * reality, a boolean can.
+ *
+ * NOTE there is no longer a free trial, so a NEW restaurant is already
+ * permanent and there is nothing here for it to do. This script now exists for
+ * the two cases that remain: reactivating a customer whose subscription lapsed,
+ * and setting or lifting a manual lockout.
  *
  * Requires scripts/serviceAccount.json (Admin SDK key — gitignored, never
  * commit it). The Admin SDK BYPASSES security rules, which is the only way
@@ -133,6 +139,13 @@ async function main() {
   console.log(`  Restaurant   ${root.name ?? "—"}`);
   console.log(`  Tenant id    ${rid}`);
   console.log(`  Owner        ${owner ? `${owner.email} (${owner.name ?? "—"})` : "— none found —"}`);
+  // Collected on the signup screen since it was added; absent on every
+  // restaurant registered before that, and on staff who joined with a code.
+  // Printed HERE because this is the line you eyeball before --confirm, and a
+  // number is how you check with the customer that you have the right one.
+  if (owner && owner.phone) {
+    console.log(`  Phone        ${owner.phone}`);
+  }
   console.log(`  Staff        ${usersSnap.size} account(s)`);
   console.log(`  Status       ${status.label}`);
   if (withExpiry.length) {
@@ -154,7 +167,7 @@ async function main() {
 
   if (!opts.confirm) {
     const action = goingPermanent
-      ? "clear the trial fields and make this restaurant PERMANENT"
+      ? "clear the expiry and make this restaurant PERMANENT"
       : `set expiresAt to ${opts.untilDate.toISOString()}`;
     console.log(`\n  DRY RUN — nothing was written.`);
     console.log(`  Re-run with --confirm to ${action}:\n`);

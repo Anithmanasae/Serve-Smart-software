@@ -108,31 +108,35 @@ Routes through Expo's tunnel so any network works; scan the QR the same way.
 
 ---
 
-## 5. Free trials: one APK, everyone gets their own 2 days
+## 5. One APK, everyone gets their own restaurant — and no trial clock
 
-Send the same APK to as many people as you like. Each person taps **Start a
-free 2-day trial**, registers their own restaurant, and gets a private
-workspace with a starter menu and eight tables. Two days later it locks and
-shows them a **Contact us** screen. You do nothing per prospect.
+Send the same APK to as many people as you like. Each person taps **Create your
+restaurant**, registers their own, and gets a private workspace with a starter
+menu and eight tables. It does **not** lock after a few days: the self-serve
+trial was removed. You do nothing per prospect, and nothing expires.
 
-### How the clock is set
+### How expiry works now
 
-`firestore.rules` requires the restaurant root doc to be created with
-`trialStartedAt == request.time`. Only a `serverTimestamp()` sentinel can
-satisfy that, so **the server picks the value** — a client cannot backdate it,
-cannot omit it, and cannot supply a deadline of its own. The deadline is then
-*computed* (`trialStartedAt + 2 days`), never stored, so there is nothing to
-tamper with. Changing the device date or reinstalling does nothing.
+There is **no** trial. `firestore.rules` rejects a registration that tries to
+carry `trialStartedAt` or `expiresAt`, so no client can put a restaurant on a
+clock. The only deadline is an explicit **`expiresAt`** on the restaurant root
+doc, writable **only** through the Admin SDK — `scripts/activateTenant.js`, or
+the Play Billing functions. Changing the device date or reinstalling does
+nothing; it is compared against Google's clock server-side.
 
-> **The safety property:** **no trial fields = never expires.** A paying
-> customer's restaurant carries neither `trialStartedAt` nor `expiresAt` and is
-> completely unaffected by the expiry rules. Activation is the *deletion* of
-> those fields. Never add an `isPaid` flag — absence cannot drift out of sync
-> with reality, a boolean can.
+> **The safety property:** **no `expiresAt` = never expires.** That is now the
+> ordinary state, not the reward for paying. Activation is the *deletion* of
+> the field. Never add an `isPaid` flag — absence cannot drift out of sync with
+> reality, a boolean can.
 
-The clock is on the **restaurant**, not the person. Staff who join with the
-join code carry no expiry of their own — they lock and unlock with their
-workspace, and you never activate anyone individually.
+`trialStartedAt` is a **dead field**. Restaurants registered under the old build
+still carry it and nothing reads it — which is exactly what makes the removal
+retroactive rather than a mass lockout. `node scripts/stripLegacyTrials.js`
+clears it if you want the documents tidy; it changes no behaviour.
+
+The deadline, when there is one, is on the **restaurant**, not the person. Staff
+who join with the join code carry no expiry of their own — they lock and unlock
+with their workspace, and you never activate anyone individually.
 
 ### Before you deploy — prove it on the emulator
 
@@ -147,8 +151,10 @@ E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/trialExp
 E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/isolation.e2e.ts
 ```
 
-The expiry suite's last checkpoints are the ones that matter: an **activated**
-restaurant works identically to one that was never on a trial.
+Two checkpoints matter most: **7**, that a restaurant carrying a decade-old
+`trialStartedAt` still works completely (if that ever fails, deploying locks out
+your existing customers), and the last, that an **activated** restaurant works
+identically to one that was never locked.
 
 ### Deploy
 
@@ -158,8 +164,9 @@ firebase deploy --only firestore:rules   # shared with production — see below
 npm run trial:audit                      # AFTER: identical. Nothing moved.
 ```
 
-Existing restaurants have no `trialStartedAt`, so they read as PERMANENT before
-and after. Only restaurants registered *after* this deploy start a clock.
+Every restaurant reads as PERMANENT before and after — including the ones
+carrying a `trialStartedAt` from the old build, since nothing reads it any more.
+No restaurant registered after this deploy starts a clock at all.
 
 ### Build the APK
 
@@ -172,7 +179,7 @@ Set `EXPO_PUBLIC_CONTACT_PHONE` (digits only, country code, no `+`) and
 button. The `demo` profile also sets `EXPO_PUBLIC_DEMO_MODE=true`, which now
 only shows a **TEST BUILD** chip with the Firebase project id on the login
 screen — a diagnostic so you can see which backend an APK talks to. It changes
-no behaviour; trials are enforced server-side for every build.
+no behaviour; expiry is enforced server-side for every build.
 
 ### Day to day
 
@@ -251,6 +258,97 @@ are inert for any restaurant with no trial fields.
 >   The old ruleset has no `hasOnly` on that create, so the extra field is
 >   accepted and then ignored, and every restaurant registered in that window
 >   is permanent and free forever.
+
+---
+
+## 5b. "Continue with Google" on login & signup
+
+Optional, and **off until it is configured** — with no client id the app draws
+no Google button at all and the email/password form works exactly as before
+(`src/lib/googleAuth.ts`). Nothing else in the app changes: a Google signup
+runs the same registration batch, writes the same documents, and creates the
+same permanent restaurant as an email signup. `firestore.rules` needed no
+change, because Firestore has no opinion about how the auth user was minted.
+
+**Four steps, and all four are needed — three out of four fails at the picker.**
+
+**1 — Turn the provider on.** Firebase console → Authentication → Sign-in
+method → **Google** → Enable. Set the support email. Save.
+
+**2 — Copy the WEB client id.** Same page, expand **Web SDK configuration**.
+Copy the *Web client ID* (ends `.apps.googleusercontent.com`) into `.env.local`
+*and* into the EAS environments you build from:
+
+```bash
+EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=1234567890-abcdef.apps.googleusercontent.com
+```
+
+```bash
+# per environment — the app takes its env from EAS, not from .env.local
+eas env:create --environment production --name EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID --value "<id>" --visibility plaintext
+```
+
+> It is the **web** client id even though this is an Android app. Android
+> sign-in mints its ID token *for* the web client; the Android client id here
+> produces `DEVELOPER_ERROR`, which reads like a signing problem and isn't.
+
+**3 — Register your signing fingerprints.** Firebase console → Project
+settings → your Android app (`com.smartserve`) → **Add fingerprint**, once per
+keystore you build with. Google checks the certificate that signed the running
+APK, so a fingerprint that is missing shows the account picker and *then*
+fails:
+
+```bash
+eas credentials -p android          # → the EAS release keystore's SHA-1
+# debug builds are signed with the local debug keystore:
+keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android
+```
+
+**4 — Rebuild.** `@react-native-google-signin/google-signin` is a **native
+module**, so it only exists in an APK built after it landed — like
+`expo-audio` and `modules/usb-printer`:
+
+```bash
+npx expo prebuild --clean
+eas build --profile smartserve --platform android
+```
+
+> **There is deliberately NO entry for this package in `app.json` → plugins,
+> and adding one breaks the build.** `npx expo install` adds it by default;
+> it was removed on purpose. The library's config plugin, given no options,
+> wires up Google's Gradle plugin and demands a `google-services.json` /
+> `GoogleService-Info.plist` that this project does not have and does not
+> need — Android's build.gradle pulls only `play-services-auth`, the module
+> autolinks like any other React Native module, and the client id is passed
+> in JS by `src/lib/googleAuth.ts`. (The plugin's other form is iOS-only and
+> wants an `iosUrlScheme`, which is an iOS client id we have no use for
+> while this is an Android product.)
+
+Existing installs are unaffected: they report Google as unavailable, hide the
+button, and keep signing in with email and password.
+
+### What it does and doesn't do
+
+- **The signup screen asks for the restaurant name and mobile number *above*
+  the Google button.** Google supplies a person, not a business — those two
+  answers have to be collected before the picker opens, or somebody
+  authenticates and is then told a text box was empty.
+- **Signing in with Google on `/login` never creates a restaurant.** An
+  account with no `userIndex` entry is bounced with the ordinary "not linked
+  to any restaurant" notice.
+- **Tapping Google on `/signup` with an account that already has a restaurant
+  signs them into it** rather than opening a second one.
+- **Sign-out clears the cached Google account**, so the next person at a shared
+  tablet gets the picker instead of the last person's session.
+
+### When it fails
+
+| Symptom | Cause |
+|---|---|
+| No Google button anywhere | `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` unset, or an APK built before this landed |
+| "Google sign-in isn't set up for this build" | SHA-1 not registered, or the Android client id used instead of the web one (`DEVELOPER_ERROR`) |
+| "Google sign-in isn't enabled for this app yet" | Step 1 not done — provider off in the Firebase console |
+| "This email already has a Smart Serve account with a password" | Same address registered both ways; sign in with the password once and Firebase links them |
 
 ---
 

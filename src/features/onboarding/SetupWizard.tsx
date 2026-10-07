@@ -79,10 +79,6 @@ type StepId = "welcome" | "type" | "kot" | "gst" | "tables" | "done";
 export type SetupMode = "firstRun" | "revisit" | "tour";
 
 export interface SetupWizardProps {
-  /** Named on the welcome card — the owner just typed it, so it proves the
-   *  registration landed before any of this is asked of them. Absent on the
-   *  tour, where they have not typed anything yet. */
-  restaurantName?: string;
   /** Called from the final card. Awaited: the button holds while it runs, so
    *  the next pass can write the config without the screen racing ahead. */
   onComplete: (answers: SetupAnswers) => void | Promise<void>;
@@ -100,7 +96,6 @@ export interface SetupWizardProps {
 }
 
 export function SetupWizard({
-  restaurantName,
   onComplete,
   onExit,
   mode = "firstRun",
@@ -234,7 +229,6 @@ export function SetupWizard({
         <ScreenEnter replayKey={step} style={styles.card}>
           {step === "welcome" && (
             <WelcomeCard
-              restaurantName={restaurantName}
               mode={mode}
               onStart={() => setStepIndex(1)}
               onSignIn={onSignIn}
@@ -399,17 +393,34 @@ const WELCOME_FEATURES: {
 ];
 
 function WelcomeCard({
-  restaurantName,
   mode,
   onStart,
   onSignIn,
 }: {
-  restaurantName?: string;
   mode: SetupMode;
   onStart: () => void;
   onSignIn?: () => void;
 }) {
   const isRevisit = mode === "revisit";
+
+  /**
+   * FIRST RUN HAS NO BODY LINE, and that is the point.
+   *
+   * It used to read "Point of sale, kitchen tickets, billing and reports" —
+   * the same four things the feature list below says, in the same order, one
+   * scroll-length earlier. The list says them better: it has icons, and it
+   * describes what the OWNER does rather than naming four modules. Saying it
+   * twice cost the three lines that were pushing the last feature and the
+   * button off the bottom of a phone.
+   *
+   * The tour keeps a sentence because it is read by someone who has never
+   * heard of the product and needs one plain claim before a list of details.
+   */
+  const body = isRevisit
+    ? "Answer these again to re-shape the app. Your menu, tables and bills are not touched."
+    : mode === "tour"
+      ? "Smart Serve runs the whole floor — point of sale, kitchen tickets, billing and reports — on one tablet."
+      : null;
 
   return (
     <View style={styles.welcome}>
@@ -429,29 +440,7 @@ function WelcomeCard({
         {isRevisit ? "How you work" : "Welcome to Smart Serve"}
       </Text>
 
-      <Text style={styles.welcomeBody}>
-        {isRevisit ? (
-          "Answer these again to re-shape the app. Your menu, tables and bills are not touched."
-        ) : mode === "tour" ? (
-          // No name and no "your restaurant is ready" — they have not
-          // registered and the card must not pretend otherwise. It says what
-          // the software IS, which is the only thing a stranger needs first.
-          "Smart Serve runs the whole floor — point of sale, kitchen tickets, billing and reports — on one tablet."
-        ) : (
-          <>
-            {restaurantName ? (
-              <>
-                <Text style={styles.welcomeName}>{restaurantName}</Text> is
-                ready.
-              </>
-            ) : (
-              "Your restaurant is ready."
-            )}
-            {"\n"}Point of sale, kitchen tickets, billing and reports — one app
-            for the whole place.
-          </>
-        )}
-      </Text>
+      {body ? <Text style={styles.welcomeBody}>{body}</Text> : null}
 
       {!isRevisit && (
         <View style={styles.features}>
@@ -581,12 +570,13 @@ function DoneCard({
             : mode === "revisit"
               ? "Back to the app"
               : mode === "tour"
-                ? // The trial button, at the moment the app has just proved
-                  // it understood their restaurant. Naming the trial rather
-                  // than the account is the whole point of putting the tour
-                  // first: they are agreeing to try THIS, which they have
-                  // now seen, not to fill in a form.
-                  "Start my 3-day free trial"
+                ? // The sign-up button, at the moment the app has just proved
+                  // it understood their restaurant. Naming the RESTAURANT
+                  // rather than the account is the point of putting the tour
+                  // first: they are agreeing to set up THIS, which they have
+                  // now seen, not to fill in a form. It used to name a 3-day
+                  // trial; there is no trial to name.
+                  "Create my restaurant"
                 : "Take your first order"}
         </Text>
         {!busy && (
@@ -607,7 +597,7 @@ function DoneCard({
         {mode === "firstRun"
           ? "We'll send a couple of tips while you find your way around. Everything here can be changed later in Account."
           : mode === "tour"
-            ? "Free for 3 days. No card needed, and everything here can be changed later."
+            ? "Free to start. No card needed, and everything here can be changed later."
             : "All of this can be changed later in Account."}
       </Text>
     </View>
@@ -761,7 +751,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: space.s1,
   },
-  welcomeName: { fontFamily: fonts.bold, color: colors.text },
   welcomeBody: {
     fontFamily: fonts.regular,
     fontSize: 15,

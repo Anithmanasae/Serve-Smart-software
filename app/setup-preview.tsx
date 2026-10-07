@@ -25,12 +25,6 @@ export default function SetupPreviewRoute() {
 
   return (
     <SetupWizard
-      // A stand-in for the name the owner would have just typed at
-      // registration — the welcome card has a slot for it, and an empty one
-      // wouldn't show how it reads. Deliberately NOT "Smart Serve <anything>":
-      // a placeholder built out of the product's own name reads as the app
-      // announcing itself as a café rather than as this owner's restaurant.
-      restaurantName="Ravi's Kitchen"
       // The preview always shows the FIRST-RUN wording — that is the version
       // being judged.
       mode="firstRun"

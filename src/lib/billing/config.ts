@@ -21,15 +21,16 @@ export const SUBSCRIPTION_ID =
 
 export const isBillingConfigured = SUBSCRIPTION_ID.length > 0;
 
-// NO FREE-TRIAL OFFER ON THE PLAY BASE PLAN.
+// THE FREE TRIAL LIVES ON THE PLAY BASE PLAN, AND NOWHERE ELSE.
 //
-// The app already runs its own trial: every restaurant is born with a
-// server-stamped `trialStartedAt` and gets `trialLength()` for free before it
-// ever sees a paywall. Adding Play's own free-trial offer on top would hand out
-// two trials back to back — ours, then Google's — and, worse, would leave two
-// systems each believing they own "is this restaurant in its trial?". Ours is
-// the one the security rules enforce, so ours is the one that exists.
-// Configure the base plan in Play Console with NO trial offer.
+// The app used to run its own trial off a server-stamped `trialStartedAt`.
+// That is gone — a new restaurant is born permanent and nothing reads the old
+// stamp (see CLAUDE.md, "THERE IS NO FREE TRIAL"). So the trial is a free
+// introductory offer on the base plan in Play Console: Google starts it,
+// bills at the end of it and mails about it. `nativeIap.fetchOffers` reads the
+// free phase back and the subscribe screen prints it. Do NOT also revive an
+// in-app clock — two systems each believing they own "is this restaurant in
+// its trial?" is one too many.
 
 /**
  * Where `verifyPurchase` is deployed.

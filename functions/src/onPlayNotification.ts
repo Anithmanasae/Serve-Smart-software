@@ -32,8 +32,9 @@
  */
 import { onMessagePublished } from "firebase-functions/v2/pubsub";
 import { logger } from "firebase-functions";
-import { getSubscription } from "./playApi";
+import { acknowledge, getSubscription } from "./playApi";
 import {
+  hasOtherLivePurchase,
   recordPurchase,
   restaurantForToken,
   revokeEntitlement,
@@ -102,7 +103,7 @@ export const onPlayNotification = onMessagePublished(
 
     const typeName = TYPE_NAMES[n.notificationType ?? -1] ?? String(n.notificationType);
     const purchaseToken = n.purchaseToken;
-    const productId = n.subscriptionId ?? "";
+    const notifiedProductId = n.subscriptionId ?? "";
 
     // Ask Play what is true NOW rather than inferring it from the event type.
     // Throwing here is correct: `retry: true` means Pub/Sub redelivers, which
@@ -122,32 +123,73 @@ export const onPlayNotification = onMessagePublished(
       return;
     }
 
+    const productId = sub.productId ?? notifiedProductId;
+    const context = { reason: `RTDN ${typeName}`, state: sub.rawState };
+
     await recordPurchase(purchaseToken, {
       restaurantId,
       productId,
       state: sub.rawState,
+      entitled: sub.entitled,
       expiresAtMs: sub.expiresAtMs,
     });
 
-    if (n.notificationType === REVOKED) {
-      await revokeEntitlement(restaurantId, { reason: `RTDN ${typeName}`, state: sub.rawState });
-      return;
-    }
-
-    if (!sub.entitled) {
-      // EXPIRED, or a paused/on-hold subscription that has run out. Setting the
-      // date Play gives us — rather than revoking — keeps a cancelled customer
-      // running to the end of the period they already paid for.
-      await setEntitlement(restaurantId, sub.expiresAtMs ?? Date.now() - 1000, {
-        reason: `RTDN ${typeName}`,
-        state: sub.rawState,
+    // An order nobody has paid for, or one abandoned before paying. It is not
+    // a subscription ending, so it must not touch the date: a restaurant that
+    // was open before its owner tried a cash payment stays exactly as open
+    // when they change their mind. The PURCHASED notification that follows a
+    // completed payment is what unlocks.
+    if (sub.unpaid) {
+      logger.info("play notification: unpaid order, access unchanged", {
+        restaurantId,
+        ...context,
       });
       return;
     }
 
-    await setEntitlement(restaurantId, sub.expiresAtMs, {
-      reason: `RTDN ${typeName}`,
-      state: sub.rawState,
-    });
+    if (sub.entitled && n.notificationType !== REVOKED) {
+      await setEntitlement(restaurantId, sub.expiresAtMs, context);
+
+      // The app normally acknowledges, but a payment that completes LATER —
+      // cash at a shop, a slow transfer — lands here with no app open and no
+      // screen that will ever run again for it. Unacknowledged, Google
+      // refunds it after three days and the restaurant that just paid is
+      // locked. Only after the entitlement is written, so acknowledging
+      // always means the restaurant really was unlocked.
+      if (sub.needsAcknowledgement && productId) {
+        await acknowledge(purchaseToken, productId).catch((e) =>
+          logger.error("play notification: acknowledge failed", {
+            restaurantId,
+            error: e instanceof Error ? e.message : String(e),
+          }),
+        );
+      }
+      return;
+    }
+
+    // Everything below ENDS access — expired, on hold, paused, revoked. Believe
+    // it only if this token is the one actually paying for the restaurant.
+    if (await hasOtherLivePurchase(restaurantId, purchaseToken)) {
+      logger.info("play notification: superseded token, access unchanged", {
+        restaurantId,
+        ...context,
+      });
+      return;
+    }
+
+    if (n.notificationType === REVOKED) {
+      await revokeEntitlement(restaurantId, context);
+      return;
+    }
+
+    // Never later than now: Play reports these states with an expiry already
+    // in the past, and that true date is the one worth keeping on record —
+    // but a state that means "no access" must not leave the door open just
+    // because a date came back in the future, or did not come back at all.
+    await setEntitlement(
+      restaurantId,
+      Math.min(sub.expiresAtMs ?? Infinity, Date.now() - 1000),
+      context,
+    );
   },
 );

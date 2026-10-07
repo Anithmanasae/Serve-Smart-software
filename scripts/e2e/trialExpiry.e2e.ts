@@ -1,36 +1,44 @@
 /**
- * TRIAL EXPIRY SUITE — the proof that the expiry rules do what they claim, and
- * (far more importantly) that they do NOTHING to a restaurant once it has been
- * activated.
+ * EXPIRY SUITE — the proof that the expiry rules do what they claim, and (far
+ * more importantly) that they do NOTHING to an ordinary restaurant.
  *
  * Run against the LOCAL EMULATORS (no live data touched):
  *   firebase emulators:start --only auth,firestore --project demo-sada-isolation
  *   E2E_EMULATOR=1 npx tsx --tsconfig scripts/e2e/tsconfig.json scripts/e2e/trialExpiry.e2e.ts
  *
- * The model under test:
- *   - EVERY new restaurant is born a 3-day trial. `trialStartedAt` is stamped
- *     by the SERVER (the rule demands it equal request.time), the deadline is
- *     COMPUTED as start + 3 days, and nothing is stored for a client to forge.
- *   - `expiresAt` OVERRIDES that computed deadline. Admin SDK only.
- *   - ACTIVATION = deleting both fields. No fields = permanent.
+ * The model under test — THE APP RUNS NO TRIAL CLOCK OF ITS OWN:
+ *   - A new restaurant is born one of two ways. PERMANENT, carrying neither
+ *     `trialStartedAt` nor `expiresAt`; or AWAITING A SUBSCRIPTION, carrying
+ *     `expiresAt` = epoch 0, which locks it until the Play Billing function
+ *     writes a real date. Epoch 0 is the only value the create rule accepts,
+ *     so no client build can hand itself a second of access.
+ *   - `expiresAt` is the ONLY deadline, and every real date in it is Admin
+ *     SDK only (the Play Billing functions, or scripts/activateTenant.js).
+ *   - ACTIVATION = deleting it. No expiresAt = permanent.
+ *   - `trialStartedAt` is a DEAD field. Old restaurants still carry it and it
+ *     must have NO effect whatsoever.
  *
  * What it proves:
- *   1. A fresh registration really is a trial, stamped with the server's clock.
- *   2. No client can clear, change or forge either field — including at
- *      registration, where a backdated or absent stamp is rejected outright.
- *      (The same raw batch WITH a serverTimestamp is accepted, so the denials
- *      are about the timestamp and not a malformed batch.)
- *   3. Past the computed deadline every app read/write dies server-side, for
+ *   1. A fresh registration is permanent, carries no expiry field, and works.
+ *   2. Registration is rejected if it tries to carry EITHER field — including a
+ *      server-stamped `trialStartedAt`, which used to be mandatory. (The same
+ *      raw batch with neither field is accepted, so the denials are about the
+ *      fields and not a malformed batch.)
+ *   3. THE RETROACTIVE GUARANTEE: a restaurant carrying a wildly backdated
+ *      `trialStartedAt` — i.e. every customer who registered under the old
+ *      build — still works completely. If this ever fails, removing the trial
+ *      silently locked out the existing customer base.
+ *   4. No client can add, clear or change either field.
+ *   5. Past an explicit `expiresAt` every app read/write dies server-side, for
  *      the owner AND for join-code staff who carry no expiry of their own.
- *   4. An expired account can still read its own profile, its userIndex and the
- *      restaurant root doc, so the app can show "trial ended" rather than a
- *      wall of permission errors.
- *   5. `expiresAt` overrides the computed deadline in BOTH directions.
- *   6. A cashier cannot strip a staff member's expiry — but CAN still run the
+ *   6. A locked-out account can still read its own profile, its userIndex and
+ *      the restaurant root doc, so the app can explain itself rather than
+ *      showing a wall of permission errors.
+ *   7. A cashier cannot strip a staff member's expiry — but CAN still run the
  *      normal approve/restrict flow.
- *   7. CONTROL: after activation the restaurant is fully functional and
- *      carries no trial fields at all. If this ever fails, activating a paying
- *      customer would not actually let them back in.
+ *   8. CONTROL: after activation the restaurant is fully functional and carries
+ *      no expiry fields at all. If this ever fails, reactivating a customer
+ *      would not actually let them back in.
  */
 import {
   createUserWithEmailAndPassword,
@@ -56,7 +64,7 @@ import { createMenuItem } from "@/features/menu/menuApi";
 
 if (process.env.E2E_EMULATOR !== "1") {
   console.error(
-    "Refusing to run: this suite stamps trial expiries and must run against " +
+    "Refusing to run: this suite stamps expiry dates and must run against " +
       "the emulators. Set E2E_EMULATOR=1 (see file header).",
   );
   process.exit(1);
@@ -73,9 +81,7 @@ const stamp = Date.now().toString(36);
 const OWNER = `trial-owner-${stamp}@sada-pos.test`;
 const WAITER = `trial-waiter-${stamp}@sada-pos.test`;
 const FORGER = `forger-${stamp}@sada-pos.test`;
-
-/** The trial length in firestore.rules `trialLength()`. Keep in sync. */
-const TRIAL_DAYS = 3;
+const SUBSCRIBER = `paywall-owner-${stamp}@sada-pos.test`;
 
 let step = 0;
 function ok(msg: string) {
@@ -120,8 +126,8 @@ const clientDaysFromNow = (days: number) =>
 
 // ── Admin-SDK helpers (bypass rules, exactly as the real tooling does) ────────
 
-/** Move the trial's START. Backdating past `trialLength` is how this suite
- *  simulates "two days later" without waiting two days. */
+/** Plant (or clear) the DEAD `trialStartedAt` stamp, exactly as a restaurant
+ *  registered under the old build carries it. Used to prove it does nothing. */
 async function setTrialStart(rid: string, value: unknown) {
   await adminDb
     .doc(`restaurants/${rid}`)
@@ -149,7 +155,8 @@ async function setUserExpiry(rid: string, uid: string, value: unknown) {
     );
 }
 
-/** WHAT THE ACTIVATION SCRIPT DOES: delete both fields. Nothing else. */
+/** WHAT THE ACTIVATION SCRIPT DOES: delete the deadline. Nothing else.
+ *  (It clears the dead stamp too, purely so the doc reads honestly.) */
 async function activate(rid: string) {
   await adminDb.doc(`restaurants/${rid}`).set(
     {
@@ -192,12 +199,13 @@ async function expectAppAccessWorks(who: string) {
 }
 
 /**
- * The owner-registration batch, built by hand so the trial stamp can be varied.
- * Mirrors signupApi.registerRestaurant exactly — the rules tie all five docs
- * together with getAfter, so anything less than the full batch is denied for
- * reasons that have nothing to do with the trial.
+ * The owner-registration batch, built by hand so the expiry fields can be
+ * varied. Mirrors signupApi.registerRestaurant exactly — the rules tie all five
+ * docs together with getAfter, so anything less than the full batch is denied
+ * for reasons that have nothing to do with expiry.
  *
- * `trialStartedAt: undefined` omits the field entirely.
+ * `trialStartedAt: undefined` / `expiresAt: undefined` omit the field entirely,
+ * which is what a real registration now sends.
  */
 async function attemptRegistration(opts: {
   uid: string;
@@ -247,24 +255,21 @@ async function attemptRegistration(opts: {
 }
 
 async function main() {
-  // ── 1. A fresh registration IS a trial, stamped with the server's clock ────
+  // ── 1. A fresh registration is PERMANENT, with no expiry field at all ─────
   await signOut(auth).catch(() => {});
-  const before = Date.now();
   await registerRestaurant("Trial Tavern", "Trial Owner", OWNER, PASSWORD);
   const ownerUid = auth.currentUser!.uid;
   const rid = (await getDoc(paths.userIndex(ownerUid))).data()!.restaurantId;
   setActiveRestaurantId(rid);
 
   const root = (await getDoc(paths.restaurantProfile())).data()!;
-  assert("trialStartedAt" in root, "a new restaurant carries trialStartedAt");
+  assert(
+    !("trialStartedAt" in root),
+    "a new restaurant carries NO trialStartedAt — there is no free trial",
+  );
   assert(
     !("expiresAt" in root),
-    "a new restaurant carries NO expiresAt (that override is Admin-SDK only)",
-  );
-  const startedMs = root.trialStartedAt!.toMillis();
-  assert(
-    startedMs >= before - 60_000 && startedMs <= Date.now() + 60_000,
-    `trialStartedAt is the SERVER's now, not an arbitrary value (got ${new Date(startedMs).toISOString()})`,
+    "a new restaurant carries NO expiresAt (that deadline is Admin-SDK only)",
   );
   const ownerDoc = (await getDoc(paths.user(ownerUid))).data()!;
   assert(
@@ -278,8 +283,8 @@ async function main() {
     price: 22000,
     enabled: true,
   });
-  await expectAppAccessWorks("trial owner (day 1)");
-  ok("a new restaurant is born a trial, stamped by the SERVER clock, and works");
+  await expectAppAccessWorks("new owner");
+  ok("a new restaurant is born PERMANENT, with neither expiry field, and works");
 
   // ── 2. Join-code staff inherit the workspace — no clock of their own ───────
   const joinCode = root.joinCode!;
@@ -297,42 +302,37 @@ async function main() {
   );
   await signInWithEmailAndPassword(auth, WAITER, PASSWORD);
   setActiveRestaurantId(rid);
-  await expectAppAccessWorks("trial waiter (day 1)");
-  ok("join-code staff work inside a live trial, carrying no expiry themselves");
+  await expectAppAccessWorks("new waiter");
+  ok("join-code staff work immediately, carrying no expiry themselves");
 
-  // ── 3. No client can clear or change the trial fields ─────────────────────
-  // THE ATTACK: a trial cashier activating their own restaurant for free.
+  // ── 3. No client can add or change an expiry field ────────────────────────
+  // THE ATTACK, INVERTED. It used to be "a trial cashier activating itself for
+  // free". With no trial there is nothing to escape, so what matters now is
+  // that a client cannot INVENT a deadline — locking a rival device out, or
+  // handing itself a paid-through date the server never sold.
   await signInWithEmailAndPassword(auth, OWNER, PASSWORD);
   setActiveRestaurantId(rid);
-  await expectDenied("cashier DELETING trialStartedAt (self-activation)", () =>
-    updateDoc(paths.restaurantProfile(), { trialStartedAt: deleteField() }),
-  );
-  await expectDenied("cashier backdating trialStartedAt", () =>
-    updateDoc(paths.restaurantProfile(), {
-      trialStartedAt: clientDaysFromNow(3650),
-    }),
-  );
-  await expectDenied("cashier granting itself an expiresAt override", () =>
+  await expectDenied("cashier granting itself an expiresAt", () =>
     updateDoc(paths.restaurantProfile(), { expiresAt: clientDaysFromNow(3650) }),
   );
-  ok("a cashier cannot activate, extend or re-time its own trial");
+  await expectDenied("cashier planting a trialStartedAt stamp", () =>
+    updateDoc(paths.restaurantProfile(), {
+      trialStartedAt: clientDaysFromNow(0),
+    }),
+  );
+  ok("a cashier cannot invent a deadline, nor plant a trial stamp");
 
   // ...but the ordinary Account → Receipt details save must STILL work. This is
-  // the regression that would bite a real demo: expiryUnchanged() sits on the
-  // same rule.
-  await expectAllowed("trial owner saving the receipt header (normal flow)", () =>
+  // the regression that would bite a real customer: expiryUnchanged() sits on
+  // the same rule.
+  await expectAllowed("owner saving the receipt header (normal flow)", () =>
     updateDoc(paths.restaurantProfile(), {
       name: "Trial Tavern Renamed",
       addressLine: "Demo Street",
       updatedAt: serverTimestamp(),
     }),
   );
-  const afterSave = (await getDoc(paths.restaurantProfile())).data()!;
-  assert(
-    afterSave.trialStartedAt !== undefined,
-    "workspace still carries trialStartedAt after a normal profile save",
-  );
-  ok("normal receipt-header save still works on a trial tenant, stamp intact");
+  ok("normal receipt-header save still works, with no expiry fields in play");
 
   // ── 4. A cashier cannot strip a staff member's expiry ─────────────────────
   await setUserExpiry(rid, waiterUid, daysFromNow(2));
@@ -355,15 +355,27 @@ async function main() {
     waiterAfter.data()!.expiresAt !== undefined,
     "waiter still carries expiresAt after the approve/restrict flow",
   );
-  // Clear it again so step 6 proves the TENANT field alone locks the waiter.
+  // Clear it again so step 7 proves the TENANT field alone locks the waiter.
   await setUserExpiry(rid, waiterUid, null);
   ok("cashier cannot clear or extend a staff expiry; normal flow unaffected");
 
-  // ── 5. The stamp cannot be forged AT REGISTRATION ─────────────────────────
+  // ── 5. NEITHER field may be forged AT REGISTRATION ────────────────────────
   await signOut(auth);
   const forger = await createUserWithEmailAndPassword(auth, FORGER, PASSWORD);
   const forgerUid = forger.user.uid;
 
+  // The one that used to be MANDATORY is now refused. This is what stops a
+  // stale client build — or a copy-pasted old signup batch — from quietly
+  // reviving the trial for everyone who installs it.
+  await expectDenied("registering WITH a server-stamped trialStartedAt", () =>
+    attemptRegistration({
+      uid: forgerUid,
+      email: FORGER,
+      rid: `forged-stamp-${stamp}`,
+      joinCode: `FS${stamp.slice(-4).toUpperCase()}`,
+      trialStartedAt: serverTimestamp(),
+    }),
+  );
   await expectDenied("registering with a BACKDATED trialStartedAt", () =>
     attemptRegistration({
       uid: forgerUid,
@@ -373,90 +385,164 @@ async function main() {
       trialStartedAt: clientDaysFromNow(-3650),
     }),
   );
-  await expectDenied("registering with a FUTURE trialStartedAt", () =>
-    attemptRegistration({
-      uid: forgerUid,
-      email: FORGER,
-      rid: `forged-fwd-${stamp}`,
-      joinCode: `FF${stamp.slice(-4).toUpperCase()}`,
-      trialStartedAt: clientDaysFromNow(3650),
-    }),
-  );
-  await expectDenied("registering with NO trialStartedAt at all", () =>
-    attemptRegistration({
-      uid: forgerUid,
-      email: FORGER,
-      rid: `forged-none-${stamp}`,
-      joinCode: `FN${stamp.slice(-4).toUpperCase()}`,
-    }),
-  );
-  await expectDenied("registering with a client-chosen expiresAt override", () =>
+  await expectDenied("registering with a client-chosen expiresAt", () =>
     attemptRegistration({
       uid: forgerUid,
       email: FORGER,
       rid: `forged-exp-${stamp}`,
       joinCode: `FE${stamp.slice(-4).toUpperCase()}`,
-      trialStartedAt: serverTimestamp(),
       expiresAt: clientDaysFromNow(3650),
     }),
   );
-  // POSITIVE CONTROL: the identical batch with a serverTimestamp is accepted,
-  // so the four denials above are about the stamp — not a malformed batch.
+  // The ONE value a client may put in `expiresAt` is the epoch-0 sentinel, so
+  // everything near it must still be refused: the server's own clock (the old
+  // trial, by another name) and any other date in the past (a client choosing
+  // its own lockout date is a client writing dates).
+  await expectDenied("registering with expiresAt = the server clock", () =>
+    attemptRegistration({
+      uid: forgerUid,
+      email: FORGER,
+      rid: `forged-now-${stamp}`,
+      joinCode: `FN${stamp.slice(-4).toUpperCase()}`,
+      expiresAt: serverTimestamp(),
+    }),
+  );
+  await expectDenied("registering with a past expiresAt that is not epoch 0", () =>
+    attemptRegistration({
+      uid: forgerUid,
+      email: FORGER,
+      rid: `forged-past-${stamp}`,
+      joinCode: `FP${stamp.slice(-4).toUpperCase()}`,
+      expiresAt: clientDaysFromNow(-1),
+    }),
+  );
+  // POSITIVE CONTROL: the identical batch with NEITHER field is accepted, so
+  // the five denials above are about the fields — not a malformed batch.
   const forgedRid = `forged-ok-${stamp}`;
-  await expectAllowed("the same batch WITH a serverTimestamp stamp", () =>
+  await expectAllowed("the same batch with NEITHER expiry field", () =>
     attemptRegistration({
       uid: forgerUid,
       email: FORGER,
       rid: forgedRid,
       joinCode: `FO${stamp.slice(-4).toUpperCase()}`,
-      trialStartedAt: serverTimestamp(),
     }),
   );
-  ok("registration rejects a backdated, future, absent or overridden stamp");
+  ok("registration rejects trialStartedAt and every client-chosen expiresAt; a clean batch passes");
 
-  // ── 6. Past the computed deadline, the whole tenant dies ──────────────────
+  // ── 5b. BORN AWAITING A SUBSCRIPTION — the paywall's whole mechanism ─────
+  // Through the REAL signup path, with the option a billing-capable build
+  // passes. The restaurant must come out locked from its first second, stay
+  // readable enough to draw the paywall, be impossible for its owner to
+  // open by hand, and open the moment the billing function writes a date.
+  await signOut(auth);
+  await registerRestaurant(
+    "Paywall Parlour",
+    "Paywall Owner",
+    SUBSCRIBER,
+    PASSWORD,
+    undefined,
+    { awaitSubscription: true },
+  );
+  const subscriberUid = auth.currentUser!.uid;
+  const subscriberRid = (
+    await adminDb.doc(`userIndex/${subscriberUid}`).get()
+  ).data()!.restaurantId as string;
+  setActiveRestaurantId(subscriberRid);
+  const born = (await getDoc(paths.restaurantProfile())).data()!;
+  assert(
+    (born.expiresAt as unknown as ClientTimestamp | undefined)?.toMillis() === 0,
+    "a restaurant born awaiting a subscription carries expiresAt = epoch 0",
+  );
+  await expectAppAccessDenied("owner who has not subscribed yet");
+  ok("AWAITING SUBSCRIPTION: born locked — no app access before paying");
+
+  await expectAllowed("unsubscribed owner reading the restaurant root doc", () =>
+    getDoc(paths.restaurantProfile()),
+  );
+  await expectAllowed("unsubscribed owner reading own profile", () =>
+    getDoc(paths.user(subscriberUid)),
+  );
+  await expectDenied("unsubscribed owner deleting the sentinel", () =>
+    updateDoc(paths.restaurantProfile(), { expiresAt: deleteField() }),
+  );
+  await expectDenied("unsubscribed owner granting itself a date", () =>
+    updateDoc(paths.restaurantProfile(), { expiresAt: clientDaysFromNow(3650) }),
+  );
+  ok("the paywall can render, and the owner cannot open the door by hand");
+
+  // What verifyPurchase does when Google confirms the trial has started.
+  await setTenantExpiry(subscriberRid, daysFromNow(3));
+  await expectAppAccessWorks("owner, three days into Google's free trial");
+  await expectAllowed("subscribed owner creates a menu item", () =>
+    createMenuItem({
+      name: "First Dish",
+      categoryId: "mains",
+      price: 9000,
+      enabled: true,
+    }),
+  );
+  ok("SUBSCRIBED: the billing function's date opens the restaurant");
+
+  // ── 6. THE RETROACTIVE GUARANTEE ─────────────────────────────────────────
+  // Every restaurant registered under the old build carries a trialStartedAt,
+  // most of them stamped long ago. Nothing may read it. If this checkpoint ever
+  // fails, deploying the trial removal locked out the existing customer base —
+  // which is the single worst outcome available in this file.
   await signOut(auth);
   await signInWithEmailAndPassword(auth, OWNER, PASSWORD);
   setActiveRestaurantId(rid);
-  await setTrialStart(rid, daysFromNow(-(TRIAL_DAYS + 1)));
-  await expectAppAccessDenied("owner, trial elapsed");
-  ok(`computed deadline: ${TRIAL_DAYS} days after the stamp, the owner is locked out`);
+  await setTrialStart(rid, daysFromNow(-3650));
+  await expectAppAccessWorks("owner of a 10-year-old trial stamp");
+  await expectAllowed("that owner still creating menu items", () =>
+    createMenuItem({
+      name: "Legacy Stamp Dosa",
+      categoryId: "mains",
+      price: 12000,
+      enabled: true,
+    }),
+  );
+  await signInWithEmailAndPassword(auth, WAITER, PASSWORD);
+  setActiveRestaurantId(rid);
+  await expectAppAccessWorks("their waiter too");
+  ok("RETROACTIVE: a decade-old trialStartedAt has NO effect — nothing reads it");
+
+  // ── 7. An explicit expiresAt DOES lock the whole tenant ──────────────────
+  await signInWithEmailAndPassword(auth, OWNER, PASSWORD);
+  setActiveRestaurantId(rid);
+  await setTenantExpiry(rid, daysFromNow(-1));
+  await expectAppAccessDenied("owner, past expiresAt");
+  ok("a past expiresAt locks the owner out — the one deadline that still bites");
 
   await signInWithEmailAndPassword(auth, WAITER, PASSWORD);
   setActiveRestaurantId(rid);
-  await expectAppAccessDenied("waiter, trial elapsed");
+  await expectAppAccessDenied("waiter, past expiresAt");
   ok("join-code staff lock out with the workspace, via the TENANT field alone");
 
-  // ── 7. ...and an expired account can still see enough for a friendly screen
-  await expectAllowed("expired waiter reading own profile", () =>
+  // ── 8. ...and a locked-out account still sees enough for a friendly screen
+  await expectAllowed("locked-out waiter reading own profile", () =>
     getDoc(paths.user(waiterUid)),
   );
-  await expectAllowed("expired waiter reading own userIndex", () =>
+  await expectAllowed("locked-out waiter reading own userIndex", () =>
     getDoc(paths.userIndex(waiterUid)),
   );
-  await expectAllowed("expired waiter reading restaurant root doc", () =>
+  await expectAllowed("locked-out waiter reading restaurant root doc", () =>
     getDoc(paths.restaurantProfile()),
   );
-  ok("expired accounts still read profile + root doc — 'trial ended' screen works");
+  ok("locked-out accounts still read profile + root doc — the notice can render");
 
-  // ── 8. expiresAt OVERRIDES the computed deadline, both directions ─────────
+  // ── 9. A FUTURE expiresAt is a paid-through date, and works ──────────────
   await signInWithEmailAndPassword(auth, OWNER, PASSWORD);
   setActiveRestaurantId(rid);
-  await setTenantExpiry(rid, daysFromNow(30)); // trial still backdated
-  await expectAppAccessWorks("owner, elapsed trial but future expiresAt");
-  ok("a future expiresAt overrides an elapsed trial (paid-through date)");
+  await setTenantExpiry(rid, daysFromNow(30));
+  await expectAppAccessWorks("owner, paid through +30d");
+  ok("a future expiresAt is a paid-through date — the workspace works");
 
-  await setTrialStart(rid, daysFromNow(0)); // fresh trial…
-  await setTenantExpiry(rid, daysFromNow(-1)); // …but an expired override
-  await expectAppAccessDenied("owner, fresh trial but past expiresAt");
-  ok("a past expiresAt overrides a healthy trial (instant lockout)");
-
-  // ── 9. ACTIVATION — delete both fields. This is the whole product. ────────
+  // ── 10. ACTIVATION — delete the deadline. This is the whole product. ─────
   await activate(rid);
   const activated = (await getDoc(paths.restaurantProfile())).data()!;
   assert(
     !("trialStartedAt" in activated) && !("expiresAt" in activated),
-    "an activated restaurant carries NEITHER trial field",
+    "an activated restaurant carries NEITHER expiry field",
   );
   await expectAppAccessWorks("activated owner");
   await expectAllowed("activated owner creates menu items", () =>
@@ -467,21 +553,16 @@ async function main() {
       enabled: true,
     }),
   );
-  ok("ACTIVATION: deleting both fields makes the restaurant permanent");
+  ok("ACTIVATION: deleting expiresAt makes the restaurant permanent again");
 
   await signInWithEmailAndPassword(auth, WAITER, PASSWORD);
   setActiveRestaurantId(rid);
   await expectAppAccessWorks("activated waiter");
   ok("activation unblocks EVERY member at once — no per-account step");
 
-  // ── 10. CONTROL: the permanent restaurant is untouched by the expiry rules
+  // ── 11. CONTROL: the permanent restaurant is untouched by the expiry rules
   await signInWithEmailAndPassword(auth, OWNER, PASSWORD);
   setActiveRestaurantId(rid);
-  const finalRoot = (await getDoc(paths.restaurantProfile())).data()!;
-  assert(
-    !("trialStartedAt" in finalRoot) && !("expiresAt" in finalRoot),
-    "permanent workspace STILL has no trial fields",
-  );
   await expectAllowed("permanent owner saving the receipt header", () =>
     updateDoc(paths.restaurantProfile(), {
       name: "Paid Palace",
@@ -489,11 +570,13 @@ async function main() {
     }),
   );
   await expectAppAccessWorks("permanent owner (final check)");
-  ok("CONTROL: no trial fields = never expires, proven against the real ruleset");
+  ok("CONTROL: no expiresAt = never expires, proven against the real ruleset");
 
   console.log(
-    `\nTRIAL EXPIRY E2E PASS — ${step} checkpoints.\n` +
-      `Server-stamped start, computed deadline, activation by deletion.\n` +
+    `\nEXPIRY E2E PASS — ${step} checkpoints.\n` +
+      `No trial clock: born permanent or awaiting a subscription (epoch 0),\n` +
+      `every other client-written date refused, a legacy trialStartedAt\n` +
+      `inert, and expiresAt the only deadline left.\n` +
       `(forged tenant left behind for inspection: ${forgedRid})`,
   );
 }
@@ -501,6 +584,6 @@ async function main() {
 main()
   .then(() => process.exit(0))
   .catch((e) => {
-    console.error("\nTRIAL EXPIRY E2E FAIL:", e);
+    console.error("\nEXPIRY E2E FAIL:", e);
     process.exit(1);
   });

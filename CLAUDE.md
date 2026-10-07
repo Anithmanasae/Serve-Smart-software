@@ -4,27 +4,72 @@ Engineering rules live in `CONVENTIONS.md` (read it before touching code).
 Setup, deploys and the trial system are in `SETUP.md`. This file covers the
 operational tasks the owner asks for by name.
 
-## How the trial works (read this before changing anything expiry-related)
+## THERE IS NO FREE TRIAL OF OURS (read this before changing anything expiry-related)
 
-Every **new** restaurant is born a 3-day trial. There is no opt-in and no demo
-build — one APK serves prospects and paying customers alike.
+The app runs **no trial clock of its own**. The free trial is Google's: a
+3-day intro offer on the Play base plan, which Google starts, bills and mails
+about. (3 days is Play's minimum; a 2-day trial cannot be configured.)
 
-- `firestore.rules` requires `trialStartedAt == request.time` when the
-  restaurant root doc is created. Only a `serverTimestamp()` sentinel can
-  satisfy that, so the **server** decides when the clock starts. A client
-  cannot backdate it, omit it, or supply a deadline of its own.
-- The deadline is **computed** (`trialStartedAt + trialLength()`), never
-  stored. Nothing exists for anyone to tamper with.
-- `expiresAt` on the root doc **overrides** the computed deadline. Admin SDK
-  only. That is how a paid-through date or a manual lockout is set.
-- **No trial fields = never expires.** This is the whole safety property.
-  Never replace it with an `isPaid` flag — absence cannot drift out of sync
-  with reality, a boolean can.
-- The clock is on the **restaurant**, not the person. Join-code staff carry no
-  expiry of their own and lock out with their workspace.
+A new restaurant is born one of two ways, and `AuthContext` decides which when
+it calls `registerRestaurant`:
 
-Proven end to end by `scripts/e2e/trialExpiry.e2e.ts` (14 checkpoints). Run it
-against the emulators after ANY change to the expiry rules:
+| Born | `expiresAt` | When |
+|---|---|---|
+| **awaiting a subscription** | epoch 0 | the build can sell (`isBillingAvailable()`): the owner lands on the paywall straight after signup |
+| **permanent** | absent | the build cannot sell — an older APK, no product id, Expo Go, every e2e suite |
+
+It used to be a 3-day self-serve trial: the create rule demanded
+`trialStartedAt == request.time` and the deadline was computed from it. That
+was removed — it locked testers out on day 3 of a 14-day Play closed test.
+
+- **Epoch 0 is a sentinel, not a deadline, and it is the ONLY value a client
+  may write** into `expiresAt` — at registration, never after. It is the one
+  date that grants nothing, so "a client cannot put itself on a clock" still
+  holds: no client can hand itself a second of access. The billing function
+  overwrites it with the real paid-through date.
+- **It is a fixed value, not `request.time`, on purpose.** The app tells
+  "never subscribed" from "lapsed" by it (`awaitingSubscription`) without a
+  second field, a pending server timestamp never reads back as "no deadline",
+  and a device clock running behind the server never believes the restaurant
+  is open.
+- **Only a build that can sell may lock.** The paywall is the one way out of
+  the awaiting state; a restaurant put there by a build with no billing would
+  be stranded. That is why the decision lives beside `isBillingAvailable()`
+  and not in `signupApi`. It also means setting
+  `EXPO_PUBLIC_PLAY_SUBSCRIPTION_ID` on a build is what turns the paywall ON
+  for everyone who signs up with it — do not set it on a production build
+  until a purchase has been proven end to end on the internal track.
+- **The order is welcome tour → signup → paywall → setup → walkthrough.** The
+  tour's answers wait on the device (`pendingSetup`, 24h) and are applied by
+  `(app)/setup.tsx` once the restaurant opens. Nothing can be written to a
+  locked restaurant, so setup cannot come before the paywall.
+- **No `expiresAt` = never expires.** This is the whole safety property. Never
+  replace it with an `isPaid` flag — absence cannot drift out of sync with
+  reality, a boolean can.
+- `trialStartedAt` is a **dead field**. Restaurants registered under the old
+  build still carry it, and *nothing reads it* — that is precisely what makes
+  the removal retroactive instead of a mass lockout. `scripts/stripLegacyTrials.js`
+  clears it (optional, changes no behaviour). Never wire it back up to a
+  deadline; a stale reader is how the whole customer base expires at once.
+- The clock, when there is one, is on the **restaurant**, not the person.
+  Join-code staff carry no expiry of their own and lock out with their
+  workspace.
+- **The permanent branch of the create rule is a known gap, kept on purpose.**
+  While a build that predates the paywall is live on Play, it must still be
+  able to register, so the rule accepts a registration with no `expiresAt`.
+  Anyone on that old build gets a free permanent restaurant. Close it by
+  dropping the first branch of `bornPermanentOrAwaitingSubscription()` once
+  the old build is no longer in use — not before, or its signups are refused
+  with nothing on screen to say why.
+- **Google's reviewers hit the paywall too.** Give them a way past it in Play
+  Console → App content → App access: a login for a restaurant made permanent
+  with `activateTenant.js`.
+
+Proven end to end by `scripts/e2e/trialExpiry.e2e.ts` (17 checkpoints).
+Checkpoints 7–9 are the paywall (born locked, cannot be opened by hand, opens
+on the billing function's date) and checkpoint 10 is the retroactive one: a
+restaurant carrying a decade-old `trialStartedAt` must still work completely.
+Run it against the emulators after ANY change to the expiry rules:
 
 ```bash
 firebase emulators:start --only auth,firestore --project demo-sada-isolation
@@ -54,7 +99,7 @@ works:
 
 ## Subscriptions / Google Play Billing (read before touching billing)
 
-The trial above is the on-ramp; this is what happens at the end of it. Google
+The paywall above is the on-ramp; this is what sits behind it. Google
 Play sells a subscription, and a Cloud Function turns that into the SAME
 `expiresAt` field `activateTenant.js` has always written. **The model did not
 change — only who holds the pen.**
@@ -90,36 +135,71 @@ The load-bearing decisions:
   us *something changed*; the function then calls `subscriptionsv2.get` and
   writes whatever that says. Maintaining our own copy of
   RENEWED/RECOVERED/RESTARTED is how a working restaurant gets locked out.
-- **A grace period stays OPEN.** `IN_GRACE_PERIOD` and `ON_HOLD` are a bank
-  declining a card, not a decision to leave, and Google is still retrying.
-  `CANCELED` also stays open to the end of the period already paid for.
+- **A grace period stays OPEN; account hold does not.** `IN_GRACE_PERIOD` is a
+  bank declining a card, not a decision to leave — Google is still retrying
+  and extends `expiryTime` to cover it. `CANCELED` also stays open to the end
+  of the period already paid for. `ON_HOLD` is what follows a grace period
+  that ran out: Google's lifecycle table says revoke, reports an `expiryTime`
+  already in the past, and can hold for two months. So how long a declined
+  card gets is ONE setting — the grace period on the base plan in Play
+  Console — and `ENTITLED_STATES` in `playApi.ts` follows Google's table
+  rather than holding a second opinion.
+- **An unpaid order changes nothing.** `PENDING` (cash at a shop, a slow
+  transfer) and `PENDING_PURCHASE_CANCELED` are not a subscription ending.
+  Neither the app nor the functions verify, acknowledge or write a date for
+  one — a restaurant that was open before its owner tried to pay must be
+  exactly as open when they abandon it. The later PURCHASED notification is
+  what unlocks, and `onPlayNotification` acknowledges it itself, because no
+  screen is open to do so.
+- **News that ENDS access is believed only from the token that is paying.**
+  A restaurant collects tokens (a resubscribe after a lapse issues a new
+  one), and the old token still gets its own EXPIRED weeks later.
+  `hasOtherLivePurchase` is what stops that stale notification locking out a
+  paid-up restaurant. News that extends access needs no such check.
 - **Reaching Google failing is never "not entitled".** `verifyPurchase` throws
   `unavailable` on a lookup failure so the app retries. Taking a paying
   restaurant offline because our function couldn't authenticate is the worst
   possible reading of an outage.
 - **Acknowledge, or Google auto-refunds after 3 days.** Both the app and the
   server acknowledge, and only after the entitlement is written.
-- **The Play base plan carries NO free-trial offer.** The app already runs its
-  own `trialStartedAt` trial and the rules enforce it. Two trial systems each
-  believing they own the question is one too many.
-- **`expo-iap` is a NATIVE module and is NOT INSTALLED YET.** Everything
-  degrades to "billing unavailable" and the expiry screen keeps its old
-  "Contact us" button, the same way `kitchenChime` and `printerService`
-  degrade. Nothing in this section is live until the module is installed, a
-  product id is set, and the functions are deployed.
+- **The Play base plan is where the free trial now LIVES.** It used to carry
+  none, because the app ran its own `trialStartedAt` trial and the rules
+  enforced it — two trial systems each believing they own the question is one
+  too many. The app's trial is gone, so that objection is gone with it: put the
+  3-day free trial on the base plan as an intro offer and let Google run it,
+  bill it and mail about it. Do NOT also revive the in-app clock.
+  A Play trial only starts when someone chooses to subscribe, so a new
+  restaurant is born locked and sent to `/subscribe` straight after signup;
+  see "THERE IS NO FREE TRIAL OF OURS".
+- **`expo-iap` is a NATIVE module: billing only exists in an APK built after
+  it landed.** It is installed (5.x, wrapping Play Billing Library 9 — Google
+  rejects uploads on anything below v8, so keeping it current is what keeps
+  the app uploadable) and `nativeIap.ts` is reconciled against its real
+  types. On an older install, or with no product id, everything degrades to
+  "billing unavailable" and the expiry screen keeps its "Contact us" button,
+  the same way `kitchenChime` and `printerService` degrade. Nothing here is
+  live until a product id is set and the functions are deployed.
+- **Three expo-iap field names fail SILENTLY if wrong** — the request is keyed
+  `google` (not `android`), the id is `obfuscatedAccountId` (no `Android`
+  suffix), and offers are `subscriptionOffers[].offerTokenAndroid`. Get the
+  second one wrong and purchases succeed with no restaurant stamped on them.
+  Re-check all three in `nativeIap.ts` after any major version bump.
 
-Turning it on (all four, in order):
+Turning it on (in order — the code side is done):
 
 ```bash
-# 1. Play Console: create the subscription, note the product id.
-# 2. The app:
-npx expo install expo-iap && npx expo prebuild --clean
-#    then reconcile the four `VERIFY:` call sites in lib/billing/nativeIap.ts
-#    against the installed version's API.
-# 3. Set the build-time id (EAS env or .env):
+# 1. Play Console: upload a build containing expo-iap to internal testing
+#    FIRST (Play will not let you create products until it has seen an APK
+#    with the billing permission), then Monetise → Subscriptions → create the
+#    subscription, a base plan, and the free-trial offer on it.
+# 2. Set the build-time id (EAS env or .env) and rebuild:
 #    EXPO_PUBLIC_PLAY_SUBSCRIPTION_ID=<product id>
-# 4. The server (needs the Blaze plan):
+# 3. The server (needs the Blaze plan):
 firebase deploy --only functions
+# 4. Wire Google to it — the steps are at the top of
+#    functions/src/playApi.ts (service account in Play Console + the Android
+#    Publisher API) and functions/src/onPlayNotification.ts (the Pub/Sub
+#    topic + "Send test notification").
 ```
 
 The Play identity is **`com.smartserve`** (`app.json` → `expo.android.package`),
@@ -141,6 +221,65 @@ mismatch fails as a "not found" that looks nothing like a region problem.
 
 Billing cannot be tested in Expo Go or a debug build. It needs a signed AAB on
 an internal testing track with licensed testers added in Play Console.
+
+## Sign in with Google (read before touching auth)
+
+"Continue with Google" on `/login` and `/signup`. Setup steps — provider,
+client id, SHA-1, rebuild — are in `SETUP.md` §5b.
+
+| Piece | File | Job |
+|---|---|---|
+| the native edge | `src/lib/googleAuth.ts` | the ONLY file touching `@react-native-google-signin/google-signin` |
+| the button | `features/auth/GoogleButton.tsx` | the G mark + the "or" divider, shared by both screens |
+| register | `features/auth/signupApi.ts` | `registerRestaurantWithGoogle` |
+| sign back in | `features/auth/AuthContext.tsx` | `signInWithGoogle` |
+
+The load-bearing decisions:
+
+- **Nothing in `firestore.rules` changed, and nothing should.** Google is a
+  different way to obtain a Firebase auth user; the registration batch after
+  it is byte-identical, which is why `registerRestaurant` and
+  `registerRestaurantWithGoogle` share `commitOwnerRegistration` rather than
+  each holding a copy. `isOwnerRegistrationBatch()` is what that function is
+  written against — a second copy is a second thing to keep in step with the
+  rules.
+- **Google and email are born the same way.** Both pass the same
+  `awaitSubscription` option, so whichever door the owner used, they meet the
+  same paywall. See "THERE IS NO FREE TRIAL OF OURS" above.
+- **The restaurant name and phone are collected BEFORE the picker opens.**
+  Google gives us a person; the app needs a business and a number to ring. So
+  the signup form puts those two fields above the fork and the email-only
+  fields (name, address, password) below it. A button that authenticates
+  someone and then complains about an empty text box is the failure this
+  layout exists to prevent.
+- **`signupInProgress` goes up BEFORE `signInWithCredential`, not after.**
+  `onAuthStateChanged` fires the moment the credential lands and a new Google
+  account has no `userIndex` yet — without the flag AuthContext concludes "not
+  linked" and signs the owner out mid-registration.
+- **Google on `/signup` with an account that already has a restaurant signs
+  them IN.** A Google account is one wrong tap away, unlike typing an email;
+  opening a duplicate workspace would strand their menu and join code in it.
+  `userIndex/{uid}` is the check.
+- **Google on `/login` creates nothing.** No restaurant, no profile — an
+  unknown account is bounced with the ordinary "not linked" notice.
+- **Rollback deletes only an account THIS call created** (`isNewUser`). A
+  pre-existing Google login is signed out, never deleted, because our batch
+  failing is not a reason to remove somebody's account.
+- **Sign-out calls `forgetGoogleAccount()` first.** Google caches the last
+  account; on a shared restaurant tablet, not clearing it signs the next
+  person straight back in as the person who just left.
+- **It is a NATIVE module and degrades like every other one.** No client id or
+  an older APK ⇒ `isGoogleAuthAvailable()` is false, no button is drawn, and
+  the email form is untouched — the same way `kitchenChime` and
+  `printerService` degrade. A hidden button beats one that always fails.
+- **It is the WEB client id, on Android.** The Android one fails as
+  `DEVELOPER_ERROR`, which reads like a keystore problem and isn't.
+- **The package is NOT listed in `app.json` → plugins, on purpose.**
+  `npx expo install` adds it; it was removed. With no options the library's
+  config plugin applies Google's Gradle plugin and requires a
+  `google-services.json` this project has never had — Android's build.gradle
+  needs only `play-services-auth`, the module autolinks, and the client id
+  arrives in JS. Do not "fix" the missing entry; prebuild fails with it.
 
 ## Activating a paying customer
 
@@ -171,7 +310,13 @@ node scripts/activateTenant.js <email> --until 2000-01-01 --confirm  # lock now
 ```bash
 node scripts/auditTenants.js               # every tenant, most urgent first
 node scripts/auditTenants.js --expiring    # ends within 24h — the chase list
+node scripts/auditTenants.js --legacy      # still carry the dead trial stamp
 node scripts/auditTenants.js --tenant <id> # one tenant in full detail
+
+# Housekeeping after the trial removal. Deletes ONLY the dead trialStartedAt
+# stamp, never expiresAt. Changes no behaviour — nothing reads it either way.
+node scripts/stripLegacyTrials.js            # candidates
+node scripts/stripLegacyTrials.js --confirm  # clear them
 
 # The wrong person registered and holds the cashier seat:
 node scripts/reassignCashier.js --to <new@email> --from <old@email> --confirm

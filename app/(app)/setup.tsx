@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert } from "react-native";
 import { Redirect, router } from "expo-router";
 import { useAuth } from "@/features/auth/AuthContext";
@@ -27,8 +27,22 @@ import {
  * would then be refused by the rules with no explanation on screen.
  */
 export default function SetupRoute() {
-  const { restaurantName, restaurantId, role, config } = useAuth();
+  const { restaurantId, role, config } = useAuth();
   const [done, setDone] = useState(false);
+  /**
+   * The tour's answers, if this device carried any across registration.
+   *
+   * `undefined` = still reading AsyncStorage, and the screen holds the splash
+   * rather than rendering the wizard: flashing "What kind of place is this?"
+   * at somebody who answered it ninety seconds ago is the exact thing the
+   * stash exists to prevent, and a frame of it is enough to see.
+   * `null` = nothing to apply, so ask.
+   */
+  const [pending, setPending] = useState<SetupAnswers | null | undefined>(
+    undefined
+  );
+  /** `handleComplete` must run once for a stash, never once per render. */
+  const applyingRef = useRef(false);
   /**
    * FIRST RUN IS LATCHED, not re-read.
    *
@@ -49,20 +63,37 @@ export default function SetupRoute() {
   if (firstRunRef.current === null) firstRunRef.current = config.needsSetup;
   const firstRun = firstRunRef.current;
 
-  const isOwner = role === "cashier" || role === "admin";
-  if (!isOwner) return <Redirect href="/" />;
-  // The write has landed and `handleComplete` has already navigated. Hold the
-  // brand splash for that one frame rather than rendering a competing
-  // <Redirect href="/">, which used to race the router.replace() into the
-  // walkthrough and could win — sending the owner home from a screen that had
-  // just decided to send them somewhere else.
-  if (done) return <BrandSplash />;
+  /**
+   * FIRST RUN ONLY. A revisit from Account is an owner deliberately changing
+   * their mind, and re-shaping a working restaurant from a stash they left on
+   * this tablet during a demo months ago is not something they asked for.
+   * `readPendingSetup` expires it at 24h as well; this is the stronger half.
+   */
+  useEffect(() => {
+    if (!firstRun) {
+      setPending(null);
+      return;
+    }
+    let alive = true;
+    void readPendingSetup().then((a) => {
+      if (alive) setPending(a);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [firstRun]);
 
-  const handleComplete = async (answers: SetupAnswers) => {
+  const handleComplete = useCallback(async (answers: SetupAnswers) => {
     try {
       const { seeded } = await completeSetup(answers, firstRun);
       // The write landed — this is the beat that means the app is now theirs.
       feel.success();
+
+      // The answers are on the restaurant now, so the device copy has done
+      // its job. Cleared on SUCCESS only: a write that failed leaves the
+      // stash in place so the retry below still has them, rather than making
+      // the owner re-answer questions they gave before they even registered.
+      void clearPendingSetup();
 
       // The anchor every activation nudge is measured from. Local and
       // instant, so it can be awaited here without holding the screen.
@@ -120,12 +151,50 @@ export default function SetupRoute() {
         "Couldn't save your setup",
         e instanceof Error ? e.message : String(e)
       );
+      // Drop back to asking. If this was the stash applying itself the screen
+      // is otherwise a splash over a write that is never going to land, and
+      // the owner has no way forward at all.
+      setPending(null);
+      applyingRef.current = false;
     }
-  };
+  }, [firstRun, restaurantId]);
+
+  /**
+   * APPLY THE TOUR'S ANSWERS instead of asking for them again.
+   *
+   * This is the second half of `pendingSetup`, and its absence was the whole
+   * bug: the tour collected three answers, stashed them, and nothing ever
+   * read them back — so a restaurant that had said "no kitchen tickets, no
+   * GST, no tables" was created with none of those fields, and
+   * `resolveRestaurantConfig` reads an absent field as the pre-wizard default.
+   * The owner watched the app come up as the exact opposite of what they had
+   * just chosen, on every one of the three.
+   *
+   * Runs at most once (`applyingRef`) — `handleComplete` navigates away, and
+   * a second pass would write the config a second time and re-seed.
+   */
+  useEffect(() => {
+    if (!pending || applyingRef.current) return;
+    applyingRef.current = true;
+    void handleComplete(pending);
+  }, [pending, handleComplete]);
+
+  const isOwner = role === "cashier" || role === "admin";
+  if (!isOwner) return <Redirect href="/" />;
+  // The write has landed and `handleComplete` has already navigated. Hold the
+  // brand splash for that one frame rather than rendering a competing
+  // <Redirect href="/">, which used to race the router.replace() into the
+  // walkthrough and could win — sending the owner home from a screen that had
+  // just decided to send them somewhere else.
+  if (done) return <BrandSplash />;
+  // Still reading the stash, or applying it. Either way the wizard must not
+  // render: `pending === undefined` for a frame is enough to flash a question
+  // this owner already answered on the welcome screen.
+  if (pending === undefined || pending) return <BrandSplash />;
+
 
   return (
     <SetupWizard
-      restaurantName={restaurantName ?? undefined}
       mode={firstRun ? "firstRun" : "revisit"}
       onComplete={handleComplete}
       // No way out while setup is still owed — the app behind this screen has

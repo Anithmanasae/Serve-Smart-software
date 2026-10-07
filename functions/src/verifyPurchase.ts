@@ -24,7 +24,7 @@ import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 import { acknowledge, getSubscription } from "./playApi";
-import { recordPurchase, setEntitlement } from "./entitlement";
+import { recordPurchase, restaurantForToken, setEntitlement } from "./entitlement";
 
 interface Req {
   purchaseToken?: string;
@@ -90,10 +90,16 @@ export const verifyPurchase = onCall<Req>(async (request) => {
     );
   }
 
-  // The restaurant Play says this was bought for. Falls back to the caller's
-  // own restaurant only when Play returned no identifier at all (older
-  // purchases made before the app started stamping it).
-  const target = sub.restaurantId ?? callerRestaurantId;
+  // The restaurant Play says this was bought for. When Play returned no
+  // identifier at all (a resubscribe made from the Play Store app rather than
+  // ours carries none), the next best witness is our own record of which
+  // restaurant this token unlocked before. Only a token nobody has ever seen
+  // falls through to the caller — otherwise one paid token, passed around,
+  // would unlock every restaurant whose owner was handed it.
+  const target =
+    sub.restaurantId ??
+    (await restaurantForToken(purchaseToken)) ??
+    callerRestaurantId;
   if (target !== callerRestaurantId) {
     logger.warn("verifyPurchase: token belongs to another restaurant", {
       uid,
@@ -106,19 +112,38 @@ export const verifyPurchase = onCall<Req>(async (request) => {
     );
   }
 
+  // Play's product id, not the caller's: it is recorded, and it is what the
+  // acknowledgement below is addressed to.
+  const boughtProductId = sub.productId ?? productId;
+
   await recordPurchase(purchaseToken, {
     restaurantId: target,
-    productId,
+    productId: boughtProductId,
     state: sub.rawState,
+    entitled: sub.entitled,
     expiresAtMs: sub.expiresAtMs,
   });
+
+  if (sub.unpaid) {
+    logger.info("verifyPurchase: payment pending", { target, state: sub.rawState });
+    return {
+      ok: false,
+      pending: true,
+      expiresAt: null,
+      reason:
+        "Google Play is waiting for your payment to complete. Your restaurant unlocks by itself as soon as it does.",
+    };
+  }
 
   if (!sub.entitled) {
     logger.info("verifyPurchase: not entitled", { target, state: sub.rawState });
     return {
       ok: false,
       expiresAt: null,
-      reason: "This subscription isn't active. If you just paid, wait a moment and try again.",
+      reason:
+        sub.rawState === "SUBSCRIPTION_STATE_ON_HOLD"
+          ? "Google Play couldn't charge your payment method. Update it in the Play Store and your restaurant unlocks by itself."
+          : "This subscription isn't active. If you just paid, wait a moment and try again.",
     };
   }
 
@@ -131,7 +156,7 @@ export const verifyPurchase = onCall<Req>(async (request) => {
   // server's word survives an owner who pays and immediately closes the app —
   // and an unacknowledged subscription is auto-refunded after three days.
   if (sub.needsAcknowledgement) {
-    await acknowledge(purchaseToken, productId).catch((e) =>
+    await acknowledge(purchaseToken, boughtProductId).catch((e) =>
       logger.error("verifyPurchase: acknowledge failed", {
         target,
         error: e instanceof Error ? e.message : String(e),

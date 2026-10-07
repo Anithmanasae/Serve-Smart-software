@@ -1,18 +1,26 @@
 /**
- * ONE description of a tenant's trial state, shared by activateTenant.js and
+ * ONE description of a tenant's expiry state, shared by activateTenant.js and
  * auditTenants.js.
  *
- * This mirrors `tenantNotExpired()` in firestore.rules. The precedence order —
- * explicit expiresAt beats the computed trial deadline beats permanent — must
- * not drift between the two scripts, or the audit will confidently report a
- * status the server disagrees with. Change the rules and change this together.
+ * This mirrors `tenantNotExpired()` in firestore.rules. That function now reads
+ * exactly ONE field, so this does too:
+ *
+ *     expiresAt present  → that is the deadline
+ *     expiresAt absent   → PERMANENT, never expires
+ *
+ * THERE IS NO TRIAL. This file used to compute a second, implicit deadline as
+ * `trialStartedAt + TRIAL_DAYS`, mirroring a `trialLength()` the rules have
+ * since dropped. Keeping that here would be worse than useless: the audit would
+ * report a restaurant as "TRIAL — EXPIRED 6d ago" that the server is happily
+ * serving, and the natural response to that line is to go and "fix" a customer
+ * who was never broken. The drift is the bug, so the fallback is gone.
+ *
+ * `trialStartedAt` is still REPORTED (as `legacyTrialStartedAt`) because old
+ * documents still carry it and it is useful to see which ones — but it never
+ * produces a deadline. `scripts/stripLegacyTrials.js` clears it for good.
  *
  * Nothing here enforces anything. The server does that.
  */
-
-/** Must match `trialLength()` in firestore.rules. */
-const TRIAL_DAYS = 2;
-const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
 /** Firestore Timestamp | Date | undefined → Date | null */
 function toDate(value) {
@@ -35,17 +43,16 @@ function describeRemaining(ms) {
 }
 
 /**
- * → { kind, permanent, expired, endsAt, label }
+ * → { kind, permanent, expired, endsAt, legacyTrialStartedAt, label }
  *
- *   kind      "permanent" | "trial" | "override"
+ *   kind      "permanent" | "override"
  *   endsAt    Date | null  (null only when permanent)
  */
 function trialStatus(root, now = new Date()) {
   const expiresAt = toDate(root && root.expiresAt);
-  const trialStartedAt = toDate(root && root.trialStartedAt);
+  const legacyTrialStartedAt = toDate(root && root.trialStartedAt);
 
-  // An explicit deadline wins outright — that is how a paid-through date and a
-  // manual revocation both work.
+  // The only deadline there is: a paid-through date, or a manual lockout.
   if (expiresAt) {
     const remaining = expiresAt.getTime() - now.getTime();
     return {
@@ -53,19 +60,8 @@ function trialStatus(root, now = new Date()) {
       permanent: false,
       expired: remaining <= 0,
       endsAt: expiresAt,
+      legacyTrialStartedAt,
       label: `PAID/OVERRIDE until ${expiresAt.toISOString()} (${describeRemaining(remaining)})`,
-    };
-  }
-
-  if (trialStartedAt) {
-    const endsAt = new Date(trialStartedAt.getTime() + TRIAL_MS);
-    const remaining = endsAt.getTime() - now.getTime();
-    return {
-      kind: "trial",
-      permanent: false,
-      expired: remaining <= 0,
-      endsAt,
-      label: `TRIAL ends ${endsAt.toISOString()} (${describeRemaining(remaining)})`,
     };
   }
 
@@ -74,8 +70,13 @@ function trialStatus(root, now = new Date()) {
     permanent: true,
     expired: false,
     endsAt: null,
-    label: "PERMANENT — no trial fields, never expires",
+    legacyTrialStartedAt,
+    // Flagged, not warned about: the stamp is inert, but seeing it explains why
+    // a doc has a field nothing reads.
+    label: legacyTrialStartedAt
+      ? "PERMANENT — never expires (carries a dead trialStartedAt stamp)"
+      : "PERMANENT — no expiresAt, never expires",
   };
 }
 
-module.exports = { TRIAL_DAYS, TRIAL_MS, toDate, describeRemaining, trialStatus };
+module.exports = { toDate, describeRemaining, trialStatus };

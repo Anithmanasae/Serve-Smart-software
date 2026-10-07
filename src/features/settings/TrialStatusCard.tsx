@@ -1,10 +1,12 @@
 /**
- * "Your free trial ends in 1 day 17 hours" — the countdown, plus a way to do
+ * "Your access ends in 1 day 17 hours" — the countdown, plus a way to do
  * something about it.
  *
- * Renders NOTHING for a permanent restaurant (the overwhelmingly common case
- * once a customer has paid): `trialEndsAt` is null and this returns null, so
- * paying customers never see trial chrome.
+ * Renders NOTHING for a permanent restaurant, which since the free trial was
+ * removed is EVERY restaurant that has not been given an explicit deadline:
+ * `accessEndsAt` is null and this returns null. So it now appears only for a
+ * subscription's paid-through date or a manual lockout — never for a trial,
+ * because there isn't one.
  *
  * The deadline itself comes from AuthContext, which resolves it from the
  * restaurant doc and the account doc together. This is display only —
@@ -25,12 +27,12 @@ import { feel } from "@/lib/feedback";
 import { colors, space, radius, shadow } from "@/theme/theme";
 
 /** Re-render once a minute so the countdown doesn't go stale on a screen the
- *  owner leaves open. Cheap: one setState per minute, and only while a trial
- *  is actually running. */
+ *  owner leaves open. Cheap: one setState per minute, and only while a
+ *  deadline actually exists. */
 const TICK_MS = 60_000;
 
 function formatRemaining(ms: number): string {
-  if (ms <= 0) return "Your trial has ended";
+  if (ms <= 0) return "Your access has ended";
   const totalMinutes = Math.floor(ms / 60_000);
   const days = Math.floor(totalMinutes / (60 * 24));
   const hours = Math.floor((totalMinutes % (60 * 24)) / 60);
@@ -46,19 +48,19 @@ function formatRemaining(ms: number): string {
 }
 
 export function TrialStatusCard() {
-  const { trialEndsAt, restaurantName, firebaseUser } = useAuth();
+  const { accessEndsAt, restaurantName, firebaseUser } = useAuth();
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (trialEndsAt === null) return;
+    if (accessEndsAt === null) return;
     const id = setInterval(() => setNow(Date.now()), TICK_MS);
     return () => clearInterval(id);
-  }, [trialEndsAt]);
+  }, [accessEndsAt]);
 
   // Permanent restaurant — nothing to say.
-  if (trialEndsAt === null) return null;
+  if (accessEndsAt === null) return null;
 
-  const remaining = trialEndsAt - now;
+  const remaining = accessEndsAt - now;
   // Under a day, this stops being informational and starts being urgent.
   const urgent = remaining <= 24 * 60 * 60 * 1000;
 
@@ -83,7 +85,7 @@ export function TrialStatusCard() {
         <Text style={styles.icon}>{urgent ? "⏳" : "✨"}</Text>
         <View style={styles.headerText}>
           <Text style={[styles.title, urgent && styles.titleUrgent]}>
-            Free trial
+            Your access
           </Text>
           <Text style={[styles.remaining, urgent && styles.remainingUrgent]}>
             {formatRemaining(remaining)}
@@ -92,7 +94,7 @@ export function TrialStatusCard() {
       </View>
       <Text style={styles.body}>
         Everything you set up — your menu, tables and bills — is saved and stays
-        yours. Activate any time to keep working without interruption.
+        yours. Renew any time to keep working without interruption.
       </Text>
       {hasContact && (
         <Pressable

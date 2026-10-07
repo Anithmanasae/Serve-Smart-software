@@ -18,14 +18,15 @@ rules_version = '2';
 //     the restaurant's real join code; the cashier approves them. Exactly one
 //     cashier can ever self-claim per restaurant via meta/bootstrap.
 //   - pending/denied/restricted accounts can read nothing but their own profile
-//   - TRIAL EXPIRY: every NEW restaurant is born as a 3-day trial, with its
-//     start stamped by the SERVER (trialStartedAt == request.time, satisfiable
-//     only by a serverTimestamp sentinel). The deadline is computed, not
-//     stored. An explicit `expiresAt` overrides it, and is Admin-SDK-only.
-//     NO TRIAL FIELDS = NEVER EXPIRES, so every existing (permanent) account
-//     is completely unaffected by this ruleset, and activating a paying
-//     customer is simply DELETING the fields. Clients can never write, change
-//     or clear either one.
+//   - EXPIRY: the app runs NO trial clock of its own. The only deadline is an
+//     explicit `expiresAt`, and every real date in it is Admin-SDK-only (the
+//     Play Billing functions, or scripts/activateTenant.js). NO expiresAt =
+//     NEVER EXPIRES, so existing customers are unaffected by this ruleset and
+//     activating one by hand is simply DELETING the field. The single thing a
+//     client may write is the epoch-0 sentinel AT REGISTRATION, which locks a
+//     new restaurant until its owner subscribes through Google Play (see the
+//     create rule). Clients can never change or clear the field afterwards.
+//     The legacy `trialStartedAt` stamp is no longer read by anything.
 //
 // MULTI-TENANT: every app doc lives under restaurants/{restaurantId}, and every
 // role check reads the caller's profile under THAT restaurant — a member of
@@ -35,7 +36,7 @@ rules_version = '2';
 // getAfter, so neither can ever point somewhere the writer doesn't belong.
 //
 // A brand-new restaurant is born in ONE atomic owner-registration batch:
-//   restaurants/{rid}            root profile (name + joinCode + trialStartedAt)
+//   restaurants/{rid}            root profile (name + joinCode)
 //   restaurants/{rid}/meta/bootstrap   { cashierClaimed: true }
 //   restaurants/{rid}/users/{uid}      the owner's approved+active CASHIER
 //   restaurantCodes/{joinCode}         → { restaurantId }
@@ -100,41 +101,41 @@ service cloud.firestore {
         return get(/databases/$(database)/documents/restaurants/$(restaurantId)/users/$(request.auth.uid)).data;
       }
 
-      // ---- trial expiry ----------------------------------------------------
-      // ABSENT FIELDS = NEVER EXPIRES. This is the whole safety property: a
-      // permanent restaurant carries neither `trialStartedAt` nor `expiresAt`,
-      // so every check below short-circuits to true and no timestamp
-      // comparison is even evaluated. The checks are never written the other
-      // way round ("expiresAt must be in the future"), because that form locks
-      // out every existing account the moment it deploys.
+      // ---- expiry ----------------------------------------------------------
+      // ABSENT FIELD = NEVER EXPIRES. This is the whole safety property: a
+      // permanent restaurant carries no `expiresAt`, so the check below
+      // short-circuits to true and no timestamp comparison is even evaluated.
+      // It is never written the other way round ("expiresAt must be in the
+      // future"), because that form locks out every existing account the
+      // moment it deploys.
       //
       // Compared against request.time — GOOGLE'S clock, evaluated server-side.
       // Changing the device date, reinstalling, or clearing app storage cannot
       // move it.
       //
-      // TWO MECHANISMS, in precedence order:
+      // THERE IS NO SELF-SERVE TRIAL. Registration used to stamp a server-side
+      // `trialStartedAt` and the deadline was COMPUTED from it, so every new
+      // restaurant was born with a 3-day clock. That clock is gone: a new
+      // restaurant now carries no expiry field at all and works indefinitely.
+      // Nothing here reads `trialStartedAt` any more, which is deliberately
+      // what makes the removal retroactive — the restaurants registered under
+      // the old build still carry the stamp, and ignoring it is what stops
+      // them locking out. See "no free trial" in CLAUDE.md before reviving it.
       //
-      //  1. `trialStartedAt` — SELF-SERVE trials. Stamped by the SERVER at
-      //     registration: the create rule below demands the field equal
-      //     request.time, which only a serverTimestamp() sentinel can satisfy.
-      //     A client cannot backdate it, cannot forge a longer window, and
-      //     cannot omit it. The deadline is COMPUTED (start + trialLength), so
-      //     there is no stored expiry for anyone to tamper with, and no
-      //     client-supplied timestamp means no clock-skew window to defend.
+      // ONE MECHANISM LEFT:
       //
-      //  2. `expiresAt` — an explicit deadline that OVERRIDES the computed one.
-      //     Writable only through the Admin SDK (which bypasses rules). Three
-      //     writers, and no others:
-      //       - functions/ (verifyPurchase, onPlayNotification) — the automatic
-      //         one. A Play subscription's paid-through date lands here, and
-      //         a refund lands here as a date in the past.
-      //       - scripts/activateTenant.js — the manual override, for a customer
-      //         who paid you outside Play, a comp, or a support fix.
-      //       - scripts/seedTrial.js — the legacy shared demo sandbox.
-      //     NOTE the functions never DELETE these fields: deleting both is what
-      //     permanent looks like, and that stays a human decision.
+      //   `expiresAt` — an explicit deadline. Writable only through the Admin
+      //   SDK (which bypasses rules). Three writers, and no others:
+      //     - functions/ (verifyPurchase, onPlayNotification) — the automatic
+      //       one. A Play subscription's paid-through date lands here, and a
+      //       refund lands here as a date in the past.
+      //     - scripts/activateTenant.js — the manual override, for a customer
+      //       who paid you outside Play, a comp, or a support fix.
+      //     - scripts/seedTrial.js — the legacy shared demo sandbox.
+      //   NOTE the functions never DELETE the field: deleting it is what
+      //   permanent looks like, and that stays a human decision.
       //
-      // Activation = DELETING both fields, which is why "no field" must always
+      // Activation = DELETING the field, which is why "no field" must always
       // mean "permanent". Never replace this with an isPaid flag: absence
       // cannot drift out of sync with reality, a boolean can.
       //
@@ -142,29 +143,19 @@ service cloud.firestore {
       //   tenant  restaurants/{rid}   — the workspace as a whole
       //   account users/{uid}         — the individual login
       // The tenant field is what makes this airtight: without it, anyone who
-      // can create a user doc inside the trial (an admin, or a fresh join-code
-      // signup) could mint a seat with no expiry and keep the workspace alive
-      // past the deadline.
+      // can create a user doc inside a locked-out workspace (an admin, or a
+      // fresh join-code signup) could mint a seat with no expiry and keep the
+      // workspace alive past the deadline.
       function restaurantDoc() {
         return get(/databases/$(database)/documents/restaurants/$(restaurantId)).data;
       }
 
-      /** How long a self-serve trial runs. THE one place to change it — it is
-       *  applied to trialStartedAt at read time, so editing this and deploying
-       *  re-times every trial in flight (including ones already expired). */
-      function trialLength() {
-        return duration.value(3, 'd');
-      }
-
-      // Explicit expiresAt wins; else the computed trial deadline; else the
-      // tenant is permanent. Repeated restaurantDoc() calls resolve to ONE
+      // No expiresAt = permanent. Repeated restaurantDoc() calls resolve to ONE
       // document read — Firestore caches identical get()s within a single rule
       // evaluation.
       function tenantNotExpired() {
-        return ('expiresAt' in restaurantDoc())
-          ? restaurantDoc().expiresAt > request.time
-          : (!('trialStartedAt' in restaurantDoc())
-             || restaurantDoc().trialStartedAt + trialLength() > request.time);
+        return !('expiresAt' in restaurantDoc())
+          || restaurantDoc().expiresAt > request.time;
       }
 
       function selfNotExpired() {
@@ -176,13 +167,13 @@ service cloud.firestore {
         return tenantNotExpired() && selfNotExpired();
       }
 
-      // No client may add, change, or CLEAR a trial field on a doc it can edit.
-      // Clearing is the dangerous one: without the first clause a trial admin
-      // could strip the trial cashier's expiry, or a trial cashier could strip
-      // the waiter's and kitchen's, and keep a seat past the deadline. Worse,
-      // on the ROOT doc, clearing trialStartedAt IS activation — a cashier
-      // could hand themselves a permanent restaurant for free. Only the Admin
-      // SDK (which bypasses rules entirely) may write these fields.
+      // No client may add, change, or CLEAR an expiry field on a doc it can
+      // edit. Clearing is the dangerous one: without the first clause an admin
+      // inside a locked-out workspace could strip the cashier's expiry, or a
+      // cashier could strip the waiter's and kitchen's, and keep a seat past
+      // the deadline. On the ROOT doc, clearing `expiresAt` IS activation — a
+      // cashier could hand themselves a permanent restaurant for free. Only
+      // the Admin SDK (which bypasses rules entirely) may write these fields.
       //
       // Each is written as two mutually exclusive shapes — "absent on both
       // sides" or "present on both sides AND equal" — so the comparison is only
@@ -197,6 +188,11 @@ service cloud.firestore {
               && request.resource.data.expiresAt == resource.data.expiresAt);
       }
 
+      // LEGACY FIELD, still pinned. Nothing reads `trialStartedAt` any more —
+      // the self-serve trial is gone — but restaurants registered under the
+      // old build still carry the stamp, and a client that could add or edit
+      // it could make a doc look like something it isn't to the next person
+      // (or script) that reads it. Cheaper to keep frozen than to explain.
       // Only ever present on the ROOT doc. On a users/{uid} write both sides
       // lack it, so this is trivially true and costs nothing.
       function trialStartedAtUnchanged() {
@@ -211,10 +207,10 @@ service cloud.firestore {
         return expiresAtUnchanged() && trialStartedAtUnchanged();
       }
 
-      // An admin creating a staff account must pass its OWN expiry down: a
-      // trial admin cannot mint a permanent (no-expiresAt) colleague and hand
-      // itself an unlimited seat. A permanent admin creates permanent accounts,
-      // exactly as before. Only reachable from the isAdmin() create branch, so
+      // An admin creating a staff account must pass its OWN expiry down: an
+      // admin carrying a deadline cannot mint a permanent (no-expiresAt)
+      // colleague and hand itself an unlimited seat. A permanent admin creates
+      // permanent accounts, which is now the ordinary case. Only reachable from the isAdmin() create branch, so
       // profile() is guaranteed to exist when this runs.
       function creatorExpiryInherited() {
         return ('expiresAt' in profile())
@@ -223,7 +219,7 @@ service cloud.firestore {
       }
 
       // A usable account = cashier-approved signup that isn't restricted today
-      // and whose trial (if any) hasn't run out.
+      // and whose deadline (if any) hasn't run out.
       function activeProfile() {
         return profile().status == 'approved'
           && profile().active == true
@@ -271,6 +267,20 @@ service cloud.firestore {
           .hasOnly(fields);
       }
 
+      // The owner's mobile, collected on the signup screen. ABSENT is always
+      // allowed: staff who join with a code are never asked for one, and every
+      // restaurant registered before the field existed carries none. Present
+      // means it must at least be a bounded string — the shape (+91 and ten
+      // digits) is checked on the client, which is where a human can be told
+      // what is wrong; this only stops a document from carrying a novel in the
+      // field a support tool is going to print.
+      function validOptionalPhone() {
+        return !('phone' in request.resource.data)
+          || (request.resource.data.phone is string
+              && request.resource.data.phone.size() >= 8
+              && request.resource.data.phone.size() <= 16);
+      }
+
       function validProfileName() {
         return request.resource.data.name is string
           && request.resource.data.name.size() > 0
@@ -293,7 +303,7 @@ service cloud.firestore {
       // ABSENT is allowed and means zero — bills written before offers existed
       // carry no such field, and an order that matched no promotion has
       // nothing to record. Same "absence is the safe default" property the
-      // trial fields rely on: the safe reading is the one you get by default.
+      // expiry field relies on: the safe reading is the one you get by default.
       //
       // Note what this does NOT do: it never checks that the amount matches
       // any offer document. It cannot — offers change, and a bill must keep
@@ -357,8 +367,8 @@ service cloud.firestore {
       // decrementing the day's summary more than once.
       //
       // voidedBy is pinned to the caller and voidedAt to request.time (only a
-      // serverTimestamp() sentinel satisfies that — the same trick that starts
-      // the trial clock), so neither the actor nor the moment can be forged.
+      // serverTimestamp() sentinel satisfies that), so neither the actor nor
+      // the moment can be forged.
       //
       // The same-day check is the load-bearing one: a day the owner has already
       // read can never change underneath them.
@@ -413,24 +423,49 @@ service cloud.firestore {
       // the restaurantCodes/{code} lookup is immutable, so the pair can't
       // drift apart.
       //
-      // EVERY NEW RESTAURANT IS BORN AS A TRIAL. `trialStartedAt` is mandatory
-      // on create and must equal request.time, so the SERVER decides when the
-      // clock starts — the only way a client can satisfy this is by sending a
-      // serverTimestamp() sentinel. It cannot backdate the field, cannot skip
-      // it, and cannot supply a deadline of its own (`expiresAt` stays banned
-      // here — that override is Admin-SDK-only). Making the trial the DEFAULT,
-      // rather than something the app opts into, means no build of the client
-      // can register itself a permanent restaurant. Activation happens later,
-      // from the Admin SDK, by deleting these fields.
+      // A NEW RESTAURANT IS BORN ONE OF TWO WAYS, and a client gets to choose
+      // neither date:
+      //
+      //   no `expiresAt`          PERMANENT. What every build before Play
+      //                           Billing sends, and what a build that cannot
+      //                           sell (no billing module, no product id)
+      //                           still sends — a paywall with nothing behind
+      //                           it would strand the owner at the door.
+      //   `expiresAt` == epoch 0  AWAITING ITS FIRST SUBSCRIPTION. Locked from
+      //                           birth; the owner meets the paywall, starts
+      //                           Google's free trial, and the billing function
+      //                           overwrites this with the real paid-through
+      //                           date.
+      //
+      // Epoch 0 and ONLY epoch 0. It is a sentinel, not a deadline: the one
+      // value a client may write is the one that grants it nothing, so
+      // "a client cannot put itself on a clock" still holds in the only sense
+      // that matters — no client can hand itself a single second of access.
+      // A fixed value rather than `request.time` on purpose: the app can tell
+      // "never subscribed" from "lapsed" by it without a second field, and
+      // there is no window in which a device clock running behind the server
+      // believes the restaurant is still open.
+      //
+      // `trialStartedAt` stays banned outright. It used to be mandatory here
+      // and the deadline was computed from it; nothing reads it now, and a
+      // field nothing reads is a field that misleads the next person to read
+      // the doc.
+      //
+      // TIGHTENING THIS: once no build that predates the paywall is still in
+      // use, drop the first branch so a restaurant can ONLY be born awaiting a
+      // subscription. Until then an old APK can still register a permanent
+      // one. Do not tighten while such a build is live on Play — it would be
+      // refused at signup with nothing on screen to say why.
+      function bornPermanentOrAwaitingSubscription() {
+        return !('expiresAt' in request.resource.data)
+          || request.resource.data.expiresAt == timestamp.value(0);
+      }
+
       allow get: if isMember();
       allow list: if false;
-      // The `in` check comes FIRST so an omitted stamp denies with a clean
-      // false rather than an evaluation error ("Property trialStartedAt is
-      // undefined on object"). Both deny; only one is readable in the audit log.
       allow create: if validProfileName()
-        && !('expiresAt' in request.resource.data)
-        && ('trialStartedAt' in request.resource.data)
-        && request.resource.data.trialStartedAt == request.time
+        && bornPermanentOrAwaitingSubscription()
+        && !('trialStartedAt' in request.resource.data)
         && isOwnerRegistrationBatch();
       allow update: if hasAnyRole(['admin', 'cashier'])
         && validProfileName()
@@ -464,8 +499,12 @@ service cloud.firestore {
 
         // Self-signup branches may never carry an expiresAt (a client would
         // only ever set one on itself to something harmless). They don't need
-        // to: a signup into a trial workspace is caught by tenantNotExpired().
-        allow create: if (isAdmin() && creatorExpiryInherited())
+        // to: a signup into a locked-out workspace is caught by
+        // tenantNotExpired().
+        // validOptionalPhone() is factored OUT of the || so it binds to every
+        // branch, the same way expiryUnchanged() is on update below.
+        allow create: if validOptionalPhone()
+          && ((isAdmin() && creatorExpiryInherited())
           // waiter/kitchen self-signup — always lands pending + inactive, and
           // only with this restaurant's real join code
           || (signedIn() && request.auth.uid == uid
@@ -485,7 +524,7 @@ service cloud.firestore {
               && getAfter(bootstrapPath()).data.cashierClaimed == true
               // the restaurant must exist after this batch (created in it, or
               // pre-existing) — no cashier claims on a phantom restaurant
-              && getAfter(rootPath()).data.name is string);
+              && getAfter(rootPath()).data.name is string));
 
         // expiryUnchanged() is factored OUT of the || so it binds to BOTH
         // branches. The cashier branch never restricted which keys it could

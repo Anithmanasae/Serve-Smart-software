@@ -17,6 +17,9 @@ import { useAuth } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { feel } from "@/lib/feedback";
+import { isValidPhone, localDigits, PHONE_CC, toE164 } from "@/features/auth/phone";
+import { AuthDivider, GoogleButton } from "@/features/auth/GoogleButton";
+import { isGoogleAuthAvailable } from "@/lib/googleAuth";
 // ONBOARDING_PREVIEW (temporary — see PreviewOnboardingButton for how to remove)
 import { PreviewOnboardingButton } from "@/features/onboarding/PreviewOnboardingButton";
 import { usePendingSetup } from "@/features/onboarding/pendingSetup";
@@ -35,16 +38,34 @@ import { colors, space, radius, shadow } from "@/theme/theme";
  * lost signup. Staff have a manager telling them where to tap; ad traffic has
  * only this screen, so this screen does one thing.
  *
- * Registering IS the trial. The server stamps a 3-day clock on the new
- * workspace (`trialStartedAt == request.time`, enforced in firestore.rules),
- * so this is open in every build — a prospect and a real customer take the
- * exact same path, and the difference is whether you activate them afterwards.
+ * Registering creates a PERMANENT restaurant. It used to stamp a 3-day clock
+ * on the new workspace (`trialStartedAt == request.time`, enforced in
+ * firestore.rules); there is no trial any more, and the rules now reject that
+ * field outright. This screen is open in every build — a prospect and a real
+ * customer take the exact same path, and nothing distinguishes them until you
+ * set a deadline on one of them from the Admin SDK.
  *
  * The owner becomes their restaurant's approved CASHIER in the same atomic
  * batch — the one-time owner seat, one per restaurant, enforced server-side.
+ *
+ * TWO WAYS IN, and the form is ordered around the difference. Above the
+ * divider are the two things Google cannot tell us — what the restaurant is
+ * called, and a number to ring — so they are asked of everybody. Below it is
+ * the email route, which exists to supply the name, address and password that
+ * a Google account already carries. Putting the fork in the middle is what
+ * stops "Continue with Google" from being a button that opens an account
+ * picker and then complains about an empty text box.
+ *
+ * The Google half is absent, not broken, on a build without the native module
+ * or without a client id (`isGoogleAuthAvailable`). Every such build keeps the
+ * email form, which is the one that has always worked.
  */
 export default function Signup() {
-  const { registerRestaurant, profile, config } = useAuth();
+  const { registerRestaurant, registerRestaurantWithGoogle, profile, config } =
+    useAuth();
+  // Asked once, at module scope in the wrapper — it cannot change while this
+  // screen is mounted (it is a property of the build and the env).
+  const googleAvailable = isGoogleAuthAvailable();
   // Answers stashed by the tour on `app/welcome.tsx`. Their presence is the
   // only thing that marks this arrival as "they have already seen the app" —
   // it survives the process being killed on the way here, which a route
@@ -54,13 +75,68 @@ export default function Signup() {
   const [restaurantName, setRestaurantName] = useState("");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  // The ten NATIONAL digits, never the "+91" — the country code is fixed
+  // furniture beside the box (India only, see features/auth/phone.ts) and is
+  // added back at submit. Keeping it out of state is what makes the length
+  // cap and the validity test straightforward.
+  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // WHICH signup is in flight, not merely whether one is. Both buttons have to
+  // go quiet while either runs — two registrations racing would create two
+  // restaurants — but only the one that was pressed should change its own
+  // label, and a Google button reading "Creating your restaurant…" while the
+  // email button is working describes the wrong thing entirely.
+  const [pending, setPending] = useState<null | "email" | "google">(null);
+  const busy = pending !== null;
 
   // Already signed in with a usable account → nothing to sign up for.
   if (profile) return <Redirect href={homePathForRole(profile.role, config)} />;
+
+  /**
+   * The two answers Google cannot give us. Checked before the picker opens as
+   * well as before the email form submits — authenticating someone and THEN
+   * telling them a text box upstairs is empty is the worst order to do these
+   * two things in.
+   */
+  function missingRestaurantDetails(): string | null {
+    if (!restaurantName.trim()) return "Enter your restaurant's name.";
+    if (!isValidPhone(phone)) {
+      return phone.length === 0
+        ? "Enter your mobile number."
+        : "Enter a 10-digit Indian mobile number.";
+    }
+    return null;
+  }
+
+  async function onGoogle() {
+    const missing = missingRestaurantDetails();
+    if (missing) {
+      feel.error();
+      setError(missing);
+      return;
+    }
+    setError(null);
+    setPending("google");
+    try {
+      const registered = await registerRestaurantWithGoogle(
+        restaurantName.trim(),
+        toE164(phone),
+      );
+      // Backed out of Google's picker. Nothing happened, so nothing is said —
+      // just give the screen back.
+      if (!registered) {
+        setPending(null);
+        return;
+      }
+      router.replace("/");
+    } catch (e) {
+      feel.error();
+      setError(friendlyAuthError(e));
+      setPending(null);
+    }
+  }
 
   async function onSubmit() {
     if (!restaurantName.trim()) {
@@ -78,26 +154,39 @@ export default function Signup() {
       setError("Enter your email and a password.");
       return;
     }
+    // Checked here rather than only on the server: a number nobody can ring
+    // is worse than no number, because it looks like a way to reach this
+    // customer right up until you try it.
+    if (!isValidPhone(phone)) {
+      feel.error();
+      setError(
+        phone.length === 0
+          ? "Enter your mobile number."
+          : "Enter a 10-digit Indian mobile number.",
+      );
+      return;
+    }
     if (password !== confirm) {
       feel.error();
       setError("Passwords don't match.");
       return;
     }
     setError(null);
-    setBusy(true);
+    setPending("email");
     try {
       await registerRestaurant(
         restaurantName.trim(),
         name.trim(),
         email.trim(),
         password,
+        toE164(phone),
       );
       // The owner is a self-approved cashier → straight into the app.
       router.replace("/");
     } catch (e) {
       feel.error();
       setError(friendlyAuthError(e));
-      setBusy(false);
+      setPending(null);
     }
   }
 
@@ -122,7 +211,7 @@ export default function Signup() {
           </Text>
           <View style={styles.trialChip}>
             <Text style={styles.trialChipText}>
-              FREE FOR 3 DAYS · NO CARD NEEDED
+              FREE TO START · NO CARD NEEDED
             </Text>
           </View>
         </View>
@@ -154,6 +243,52 @@ export default function Signup() {
             placeholderTextColor={colors.textMuted}
             maxLength={60}
           />
+
+          <Text style={styles.label}>Mobile number</Text>
+          {/* "+91" is FURNITURE, not a field. It sits inside the same box as
+              the digits so the pair reads as one number, and it cannot be
+              edited — this app is sold in India only (₹, GST, one Play
+              listing), so a country picker would be a question with one
+              answer asked of someone three fields from finishing.
+
+              No maxLength on the input: a paste of "+91 98765 43210" or
+              "09876543210" has to survive long enough for localDigits() to
+              trim it, and maxLength would chop the tail off first, leaving a
+              number that is wrong by exactly the amount that is hardest to
+              notice. */}
+          <View style={styles.phoneRow}>
+            <Text style={styles.phoneCc}>{PHONE_CC}</Text>
+            <View style={styles.phoneDivider} />
+            <TextInput
+              style={styles.phoneInput}
+              keyboardType="phone-pad"
+              autoComplete="tel"
+              textContentType="telephoneNumber"
+              value={phone}
+              onChangeText={(t) => setPhone(localDigits(t))}
+              placeholder="9876543210"
+              placeholderTextColor={colors.textMuted}
+            />
+          </View>
+          <Text style={styles.hint}>
+            So we can reach you about your restaurant. We don't send marketing.
+          </Text>
+
+          {/* THE FORK. Everything above is asked of everyone; everything below
+              is the email route re-entering by hand what a Google account
+              already carries. Absent entirely on a build that cannot do
+              Google, which leaves the original single-column form exactly as
+              it was rather than a divider with nothing above it. */}
+          {googleAvailable && (
+            <>
+              <GoogleButton
+                busy={pending === "google"}
+                disabled={busy}
+                onPress={onGoogle}
+              />
+              <AuthDivider label="or sign up with email" />
+            </>
+          )}
 
           <Text style={styles.label}>Full name</Text>
           <TextInput
@@ -192,7 +327,12 @@ export default function Signup() {
             placeholderTextColor={colors.textMuted}
           />
           {error && <Text style={styles.error}>{error}</Text>}
-          <TrialButton busy={busy} spotlight={fromTour} onPress={onSubmit} />
+          <TrialButton
+            busy={pending === "email"}
+            disabled={busy}
+            spotlight={fromTour}
+            onPress={onSubmit}
+          />
 
           <Pressable
             style={({ pressed }) => [styles.backLink, pressed && { opacity: 0.6 }]}
@@ -221,13 +361,13 @@ export default function Signup() {
 }
 
 /**
- * The button that starts the trial.
+ * The button that creates the restaurant.
  *
- * It says what it does. "Create Restaurant" was accurate and told a prospect
- * nothing about the thing they were promised on the way in — every route to
- * this screen (the ad, the login link, the tour's last card) says "3-day free
- * trial", and the button they finally reach should be recognisably the same
- * offer rather than a different-sounding administrative step.
+ * It says what it does, and it must not promise a trial: there isn't one any
+ * more, and every route to this screen (the login link, the tour's last card)
+ * has been brought into line so the button reads as the same step they were
+ * offered rather than a different-sounding one. Do not put a duration back in
+ * the label without putting the clock back in firestore.rules first.
  *
  * `spotlight` is for the arrival that comes straight off the tour. The ring
  * pulses three times and then STOPS: an attention cue is a sentence, not a
@@ -237,10 +377,16 @@ export default function Signup() {
  */
 function TrialButton({
   busy,
+  disabled,
   spotlight,
   onPress,
 }: {
+  /** This button's own flow is running — it says so in the label. */
   busy: boolean;
+  /** ANY signup on the screen is running, including the Google one. Separate
+   *  from `busy` so this button goes quiet during a Google sign-up without
+   *  claiming to be creating the restaurant itself. */
+  disabled: boolean;
   spotlight: boolean;
   onPress: () => void;
 }) {
@@ -298,16 +444,16 @@ function TrialButton({
         style={({ pressed }) => [
           styles.button,
           spotlight && styles.buttonSpotlit,
-          busy && styles.buttonDisabled,
+          disabled && styles.buttonDisabled,
           pressed && styles.buttonPressed,
         ]}
         onPress={onPress}
         onPressIn={feel.press}
-        disabled={busy}
+        disabled={disabled}
         accessibilityRole="button"
       >
         <Text style={styles.buttonText}>
-          {busy ? "Creating your restaurant…" : "Start my 3-day free trial"}
+          {busy ? "Creating your restaurant…" : "Create my restaurant"}
         </Text>
       </Pressable>
     </View>
@@ -353,6 +499,39 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   error: { color: colors.danger, fontSize: 14, marginTop: space.s2 },
+  hint: { color: colors.textMuted, fontSize: 12, marginTop: -space.s1 },
+
+  // Mirrors `input` exactly — same surface, border, radius and height — so
+  // the country code reads as part of the field rather than as a chip parked
+  // next to it. Padding moves onto the children so the digits still start
+  // where every other field's text starts.
+  phoneRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+  },
+  phoneCc: {
+    paddingHorizontal: space.s4,
+    paddingVertical: space.s4,
+    fontSize: 16,
+    color: colors.textMuted,
+    fontWeight: "600",
+  },
+  phoneDivider: {
+    width: 1,
+    alignSelf: "stretch",
+    marginVertical: space.s2,
+    backgroundColor: colors.border,
+  },
+  phoneInput: {
+    flex: 1,
+    padding: space.s4,
+    fontSize: 16,
+    color: colors.text,
+  },
 
   savedCard: {
     flexDirection: "row",

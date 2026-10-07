@@ -1,10 +1,14 @@
 /**
- * READ-ONLY AUDIT — who is on trial, who is expiring, who has paid.
+ * READ-ONLY AUDIT — who is permanent, who is expiring, who has paid.
  *
- * Performs ZERO writes. This is the tool you'll actually live in: with
- * self-serve trials, every prospect registers their own tenant, so "how many
- * restaurants exist and what state are they in" stops being something you can
- * hold in your head.
+ * Performs ZERO writes. This is the tool you'll actually live in: every
+ * prospect registers their own tenant, so "how many restaurants exist and what
+ * state are they in" stops being something you can hold in your head.
+ *
+ * THERE IS NO TRIAL any more, so the ordinary state is PERMANENT and this list
+ * is mostly a roll call. Only a tenant carrying an explicit `expiresAt` — a
+ * subscription's paid-through date, or a manual lockout — can ever show as
+ * expiring or expired.
  *
  * Two modes:
  *
@@ -13,7 +17,7 @@
  *
  * Flags:
  *   --expiring   only tenants that end within 24h (your chase list)
- *   --trials     only tenants still on a trial
+ *   --legacy     only tenants still carrying the dead trialStartedAt stamp
  *   --paid       only permanent / paid-through tenants
  *
  * Status precedence comes from scripts/trialStatus.js, which mirrors
@@ -39,7 +43,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--tenant") opts.tenant = argv[++i];
     else if (arg === "--expiring") opts.filter = "expiring";
-    else if (arg === "--trials") opts.filter = "trials";
+    else if (arg === "--legacy") opts.filter = "legacy";
     else if (arg === "--paid") opts.filter = "paid";
     else {
       console.error(`\n  Unknown argument "${arg}".\n`);
@@ -101,7 +105,7 @@ async function auditOne(db, restaurantId, now) {
 function matchesFilter(status, filter) {
   if (!filter) return true;
   if (filter === "paid") return status.permanent || status.kind === "override";
-  if (filter === "trials") return status.kind === "trial";
+  if (filter === "legacy") return status.legacyTrialStartedAt !== null;
   if (filter === "expiring") {
     if (status.endsAt === null) return false;
     const ms = status.endsAt.getTime() - Date.now();
@@ -144,15 +148,13 @@ async function auditAll(db, now, filter) {
   }
 
   // Sorted by what needs YOUR attention, not by date:
-  //   0 expired      — waiting on you to activate them
-  //   1 live trial   — soonest deadline first, your chase list
-  //   2 paid-through — fine for now, renews later
-  //   3 permanent    — nothing to do, ever
+  //   0 expired      — locked out, waiting on you
+  //   1 paid-through — fine for now, renews later
+  //   2 permanent    — nothing to do, ever (the ordinary case)
   const rank = (r) => {
     if (r.status.expired) return 0;
-    if (r.status.kind === "trial") return 1;
-    if (r.status.kind === "override") return 2;
-    return 3;
+    if (r.status.kind === "override") return 1;
+    return 2;
   };
   rows.sort((a, b) => {
     const d = rank(a) - rank(b);
@@ -179,13 +181,23 @@ async function auditAll(db, now, filter) {
     );
   }
 
-  const trials = rows.filter((r) => r.status.kind === "trial" && !r.status.expired);
   const expired = rows.filter((r) => r.status.expired);
   const paid = rows.filter((r) => r.status.permanent || r.status.kind === "override");
+  const legacy = rows.filter((r) => r.status.legacyTrialStartedAt !== null);
   console.log(
-    `\n  ${rows.length} tenant(s): ` +
-      `${trials.length} on trial, ${expired.length} expired, ${paid.length} paid/permanent\n`,
+    `
+  ${rows.length} tenant(s): ` +
+      `${expired.length} expired, ${paid.length} paid/permanent
+`,
   );
+  if (legacy.length) {
+    console.log(
+      `  ${legacy.length} still carry a dead trialStartedAt stamp (inert —` +
+        ` nothing reads it). Clear them with:`,
+    );
+    console.log(`    node scripts/stripLegacyTrials.js --confirm
+`);
+  }
   if (expired.length) {
     console.log(`  Activate one with:`);
     console.log(

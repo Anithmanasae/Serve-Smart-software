@@ -34,12 +34,26 @@ export default function Pending() {
     signOut,
     restaurantName,
     config,
+    awaitingSubscription,
   } = useAuth();
 
   if (loading) return <BrandSplash />;
   // Approved (or activated) while looking at this screen → straight in.
   if (profile) return <Redirect href={homePathForRole(profile.role, config)} />;
   if (!firebaseUser || !gate) return <Redirect href="/login" />;
+  // A brand-new owner who has not subscribed yet goes STRAIGHT to the paywall.
+  // Parking them here first would greet somebody who registered a minute ago
+  // with a lockout card and a button to press before they see an offer.
+  // Only when this build can sell — otherwise the card below, with its
+  // Contact button, is the one way forward and must stay reachable.
+  if (
+    gate === "expired" &&
+    awaitingSubscription &&
+    gatedRole === "cashier" &&
+    isBillingAvailable()
+  ) {
+    return <Redirect href="/subscribe" />;
+  }
 
   async function onContact() {
     const opened = await openContactChat(
@@ -81,17 +95,28 @@ export default function Pending() {
       title: "Account removed",
       body: "This account no longer exists. Contact the cashier if you believe this is an error.",
     },
-    expired: {
-      icon: "⌛",
-      title: "Your free trial has ended",
-      // Staff cannot fix this and must not be told to try. The workspace is
-      // the owner's, the payment method is the owner's, and a waiter reading
-      // "get in touch to activate" will either call you or put a restaurant
-      // on their own card.
-      body: isOwner
-        ? "Thanks for trying Smart Serve. Your menu, tables and settings are all still saved — nothing has been deleted. Subscribe to pick up exactly where you left off."
-        : "Smart Serve is locked for this restaurant until the owner renews it. Nothing has been deleted — everything is exactly where you left it. Let your manager know.",
-    },
+    expired: awaitingSubscription
+      ? {
+          // Never subscribed, and reached only on a build that cannot sell
+          // (a build that can is redirected to the paywall above). Nothing
+          // has ended, so the lapsed copy below would be untrue.
+          icon: "🔑",
+          title: "One step left",
+          body: isOwner
+            ? "Your restaurant is created, but this version of the app can't start your subscription. Update Smart Serve from the Play Store, or get in touch and we'll open it for you."
+            : "This restaurant isn't open in Smart Serve yet — the owner still has to start the subscription. Let your manager know.",
+        }
+      : {
+          icon: "⌛",
+          title: "Your access has ended",
+          // Staff cannot fix this and must not be told to try. The workspace
+          // is the owner's, the payment method is the owner's, and a waiter
+          // reading "get in touch to activate" will either call you or put a
+          // restaurant on their own card.
+          body: isOwner
+            ? "Your menu, tables and settings are all still saved — nothing has been deleted. Subscribe to pick up exactly where you left off."
+            : "Smart Serve is locked for this restaurant until the owner renews it. Nothing has been deleted — everything is exactly where you left it. Let your manager know.",
+        },
   }[gate];
 
   // The owner of an expired workspace, on a build that can actually sell —
