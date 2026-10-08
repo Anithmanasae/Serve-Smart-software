@@ -2,11 +2,13 @@
  * "Your access ends in 1 day 17 hours" — the countdown, plus a way to do
  * something about it.
  *
- * Renders NOTHING for a permanent restaurant, which since the free trial was
- * removed is EVERY restaurant that has not been given an explicit deadline:
- * `accessEndsAt` is null and this returns null. So it now appears only for a
- * subscription's paid-through date or a manual lockout — never for a trial,
- * because there isn't one.
+ * Renders NOTHING for a permanent restaurant: `accessEndsAt` is null and this
+ * returns null. Otherwise it says one of three things:
+ *
+ *   renewing subscription   "Subscription active — Renews on 8 Nov". No
+ *                           countdown and no alarm; the date moves by itself.
+ *   cancelled subscription  the countdown, pointing at the Play Store.
+ *   manual deadline         the countdown, pointing at us (activateTenant.js).
  *
  * The deadline itself comes from AuthContext, which resolves it from the
  * restaurant doc and the account doc together. This is display only —
@@ -47,8 +49,17 @@ function formatRemaining(ms: number): string {
   return `${minutes} minute${minutes === 1 ? "" : "s"} left`;
 }
 
+/** "8 Nov 2026" — a renewal date is read once, not watched tick down. */
+function formatDate(ms: number): string {
+  return new Date(ms).toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export function TrialStatusCard() {
-  const { accessEndsAt, restaurantName, firebaseUser } = useAuth();
+  const { accessEndsAt, restaurant, restaurantName, firebaseUser } = useAuth();
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -59,6 +70,54 @@ export function TrialStatusCard() {
 
   // Permanent restaurant — nothing to say.
   if (accessEndsAt === null) return null;
+
+  // A SUBSCRIPTION THAT RENEWS IS NOT RUNNING OUT.
+  //
+  // `accessEndsAt` is the end of the period already paid for, and for a
+  // subscriber on auto-renew that date is about to move forward by itself.
+  // Counting down to it put a red "2 minutes left — renew to keep working"
+  // card in front of somebody who had just subscribed, and in real use would
+  // do the same in the last days of every month. So a renewing subscription
+  // gets a date and no alarm, and the countdown below is kept for the cases
+  // where access really is ending: a cancelled subscription, or a manual
+  // deadline.
+  //
+  // `subscription` is display-only and written by the billing functions; a
+  // deadline set by hand with activateTenant.js leaves it stale, hence the
+  // check that it still describes the deadline in force (the functions put
+  // `expiresAt` at most a day past `paidThrough`).
+  const subscription = restaurant?.subscription;
+  const paidThroughMs = subscription?.paidThrough?.toMillis() ?? null;
+  const describesDeadline =
+    paidThroughMs !== null &&
+    accessEndsAt >= paidThroughMs &&
+    accessEndsAt - paidThroughMs <= 2 * 24 * 60 * 60 * 1000;
+
+  if (subscription?.autoRenew && describesDeadline && paidThroughMs !== null) {
+    return (
+      <View style={styles.card}>
+        <View style={styles.header}>
+          <Text style={styles.icon}>✨</Text>
+          <View style={styles.headerText}>
+            <Text style={styles.title}>Subscription active</Text>
+            <Text style={styles.remaining}>
+              {paidThroughMs > now
+                ? `Renews on ${formatDate(paidThroughMs)}`
+                : "Renewing now"}
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.body}>
+          Billed by Google Play. To change or cancel, open the Play Store, tap
+          your profile picture, then Payments and subscriptions.
+        </Text>
+      </View>
+    );
+  }
+
+  // Cancelled, but paid up until the date below. The way back is the Play
+  // Store, not a message to us — so no Contact button on this one.
+  const cancelledSubscription = !!subscription && describesDeadline;
 
   const remaining = accessEndsAt - now;
   // Under a day, this stops being informational and starts being urgent.
@@ -93,10 +152,11 @@ export function TrialStatusCard() {
         </View>
       </View>
       <Text style={styles.body}>
-        Everything you set up — your menu, tables and bills — is saved and stays
-        yours. Renew any time to keep working without interruption.
+        {cancelledSubscription
+          ? "Your subscription is set to end and won't renew. Everything you set up is saved and stays yours. To keep working without interruption, turn renewal back on in the Play Store under Payments and subscriptions."
+          : "Everything you set up — your menu, tables and bills — is saved and stays yours. Renew any time to keep working without interruption."}
       </Text>
-      {hasContact && (
+      {hasContact && !cancelledSubscription && (
         <Pressable
           style={({ pressed }) => [styles.button, pressed && styles.pressed]}
           onPress={onContact}

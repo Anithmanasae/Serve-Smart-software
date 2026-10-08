@@ -148,7 +148,9 @@ export const onPlayNotification = onMessagePublished(
     }
 
     if (sub.entitled && n.notificationType !== REVOKED) {
-      await setEntitlement(restaurantId, sub.expiresAtMs, context);
+      await setEntitlement(restaurantId, sub.expiresAtMs, context, {
+        autoRenewing: sub.autoRenewing,
+      });
 
       // The app normally acknowledges, but a payment that completes LATER —
       // cash at a shop, a slow transfer — lands here with no app open and no

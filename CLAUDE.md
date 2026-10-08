@@ -156,6 +156,20 @@ The load-bearing decisions:
   one), and the old token still gets its own EXPIRED weeks later.
   `hasOtherLivePurchase` is what stops that stale notification locking out a
   paid-up restaurant. News that extends access needs no such check.
+- **A renewing subscription stays open a day past its paid-through time**
+  (`RENEWAL_SLACK_MS` in `entitlement.ts`). A renewal is not instantaneous:
+  the period ends, Google charges, and only then does the notification move
+  the date. On the first real test purchase that gap was 28 seconds, during
+  which a paid-up restaurant was thrown out to the paywall — once a month,
+  mid-service, in production. The slack applies only while Play reports
+  `autoRenewEnabled`; a cancelled, held, expired or refunded subscription is
+  written with the true date and no slack.
+- **`subscription` on the restaurant doc is DISPLAY ONLY.** The functions
+  write `{ autoRenew, paidThrough }` beside `expiresAt` so the Account card
+  can say "Renews on 8 Nov" instead of counting down to a date that is about
+  to move. Nothing gates on it, and it is not an `isPaid` flag: access is
+  `expiresAt` and nothing else. A deadline set by hand leaves it stale, which
+  is why `TrialStatusCard` checks it still describes the deadline in force.
 - **Reaching Google failing is never "not entitled".** `verifyPurchase` throws
   `unavailable` on a lookup failure so the app retries. Taking a paying
   restaurant offline because our function couldn't authenticate is the worst

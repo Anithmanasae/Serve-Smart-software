@@ -99,6 +99,25 @@ export async function hasOtherLivePurchase(
 }
 
 /**
+ * How long past Play's paid-through time a RENEWING restaurant stays open.
+ *
+ * A renewal is not instantaneous. The old period ends, Google charges the
+ * card, and only then does its notification reach `onPlayNotification` and
+ * move the date forward. Measured on the first real test purchase that gap
+ * was 28 seconds — 28 seconds, once a month, in which a restaurant that had
+ * done nothing wrong was thrown out to the paywall mid-service. A delayed or
+ * redelivered notification makes it minutes or hours.
+ *
+ * So while Google says it will charge again, the door stays open a day past
+ * the period it has already been paid for. The slack is NOT free service:
+ * the moment a subscription stops renewing (cancelled, on hold, expired,
+ * refunded) the next write carries no slack and the true date applies.
+ * The worst case is a renewal notification lost outright, which costs one
+ * day — against the alternative of locking paying customers every month.
+ */
+export const RENEWAL_SLACK_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Set the restaurant's paid-through date.
  *
  * Idempotent by design: Play delivers notifications at-least-once, and the app
@@ -114,6 +133,9 @@ export async function setEntitlement(
   restaurantId: string,
   expiresAtMs: number | null,
   context: { reason: string; state: string },
+  /** Pass `autoRenewing: true` only for a subscription Play says is entitled
+   *  AND will charge again; it is what earns `RENEWAL_SLACK_MS`. */
+  renewal: { autoRenewing: boolean } = { autoRenewing: false },
 ): Promise<boolean> {
   if (!restaurantId) return false;
   const ref = db().collection("restaurants").doc(restaurantId);
@@ -126,12 +148,24 @@ export async function setEntitlement(
   // No expiry from Play (a test purchase, or a lifetime grant) — hold the
   // restaurant open for a week and let the next notification correct it.
   // Deliberately NOT "permanent": see the header.
-  const effective =
+  const paidThrough =
     expiresAtMs ?? Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const effective =
+    paidThrough + (renewal.autoRenewing ? RENEWAL_SLACK_MS : 0);
 
   await ref.set(
     {
       expiresAt: Timestamp.fromMillis(effective),
+      // DISPLAY ONLY — what the Account screen says about the subscription
+      // ("Renews on 8 Nov" rather than a countdown to a date that is about to
+      // move). Nothing may ever gate on this: `expiresAt` above is the only
+      // thing the rules and AuthContext read, and it stays that way. It is
+      // also not an `isPaid` flag by another name — it records what Play said
+      // about renewal, not whether the restaurant may be used.
+      subscription: {
+        autoRenew: renewal.autoRenewing,
+        paidThrough: Timestamp.fromMillis(paidThrough),
+      },
       updatedAt: FieldValue.serverTimestamp(),
     },
     { merge: true },
@@ -140,6 +174,8 @@ export async function setEntitlement(
   logger.info("entitlement written", {
     restaurantId,
     expiresAt: new Date(effective).toISOString(),
+    paidThrough: new Date(paidThrough).toISOString(),
+    autoRenewing: renewal.autoRenewing,
     ...context,
   });
   return true;

@@ -74,6 +74,9 @@ export interface SubscriptionState {
   /** The subscription product Play says this token is for. Play's word, not
    *  the client's — it is what acknowledgement is addressed to. */
   productId: string | null;
+  /** True while Google intends to charge again at the end of this period.
+   *  False once the buyer has cancelled — the period then simply runs out. */
+  autoRenewing: boolean;
   /** When access should end, epoch millis. Null means Play gave no expiry. */
   expiresAtMs: number | null;
   /** The restaurant this purchase was made for, echoed back by Play from the
@@ -150,8 +153,10 @@ export async function getSubscription(
   // LATEST expiry is the one that matters — it is when access actually ends.
   let expiresAtMs: number | null = null;
   let productId: string | null = null;
+  let autoRenewing = false;
   for (const line of d.lineItems ?? []) {
     productId ??= line.productId ?? null;
+    if (line.autoRenewingPlan?.autoRenewEnabled === true) autoRenewing = true;
     if (!line.expiryTime) continue;
     const ms = Date.parse(line.expiryTime);
     if (Number.isFinite(ms) && (expiresAtMs === null || ms > expiresAtMs)) {
@@ -163,6 +168,7 @@ export async function getSubscription(
     entitled: ENTITLED_STATES.has(rawState),
     unpaid: UNPAID_STATES.has(rawState),
     productId,
+    autoRenewing,
     expiresAtMs,
     restaurantId: d.externalAccountIdentifiers?.obfuscatedExternalAccountId ?? null,
     rawState,

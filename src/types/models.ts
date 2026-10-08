@@ -144,6 +144,23 @@ export interface RestaurantProfile {
    * is born without it and is entirely unaffected by the expiry rules.
    */
   expiresAt?: Ts;
+  /**
+   * What Google Play last said about this restaurant's subscription. Written
+   * by the billing functions next to `expiresAt`, absent on a restaurant that
+   * has never subscribed.
+   *
+   * DISPLAY ONLY. It exists so the Account screen can say "Renews on 8 Nov"
+   * instead of counting down to a date that is about to move. Nothing gates
+   * on it — access is `expiresAt` and nothing else, in the rules and in
+   * AuthContext alike.
+   */
+  subscription?: {
+    /** Google will charge again at the end of the period. */
+    autoRenew: boolean;
+    /** The end of the period already paid for (or of the free trial).
+     *  `expiresAt` sits a little after this while `autoRenew` is true. */
+    paidThrough?: Ts;
+  };
   updatedAt: Ts;
 }
 

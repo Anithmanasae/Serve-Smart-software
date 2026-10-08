@@ -147,10 +147,12 @@ export const verifyPurchase = onCall<Req>(async (request) => {
     };
   }
 
-  await setEntitlement(target, sub.expiresAtMs, {
-    reason: "verifyPurchase",
-    state: sub.rawState,
-  });
+  await setEntitlement(
+    target,
+    sub.expiresAtMs,
+    { reason: "verifyPurchase", state: sub.rawState },
+    { autoRenewing: sub.autoRenewing },
+  );
 
   // Acknowledge from the server too. The app also acknowledges, but only the
   // server's word survives an owner who pays and immediately closes the app —
