@@ -77,6 +77,12 @@ export interface SubscriptionOffer {
   /** e.g. "₹799.00" — localized and currency-correct, straight from Play.
    *  Never format a price yourself; Play knows the user's country. */
   formattedPrice: string;
+  /** The same recurring price as a number, in millionths of the currency
+   *  unit. For ARITHMETIC only ("less than ₹17 a day") — anything that prints
+   *  the price itself prints `formattedPrice`. */
+  priceMicros: number;
+  /** ISO 4217, e.g. "INR". */
+  currencyCode: string;
   /** e.g. "P1M" (ISO 8601 duration) — monthly vs annual. */
   billingPeriod: string;
   /** e.g. "P3D" when this buyer would start on a free trial, else null. Play
@@ -173,6 +179,8 @@ export async function fetchOffers(): Promise<SubscriptionOffer[]> {
       const offer: SubscriptionOffer = {
         offerToken: o.offerTokenAndroid,
         formattedPrice: recurring.formattedPrice,
+        priceMicros: Number(recurring.priceAmountMicros) || 0,
+        currencyCode: recurring.priceCurrencyCode ?? "",
         billingPeriod: recurring.billingPeriod,
         trialPeriod: trial?.billingPeriod ?? null,
       };

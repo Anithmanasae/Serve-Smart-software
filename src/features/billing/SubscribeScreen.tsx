@@ -29,11 +29,19 @@
  *   and an owner who has paid must never be shown a price again.
  * - **Prices come from Play, formatted by Play.** Never hardcode "₹799" — Play
  *   knows the buyer's country, currency and tax. A price rendered by us is a
- *   price that will one day disagree with the one they are charged.
- * - **The charge is stated beside the button, in full.** "Free for 3 days,
- *   then ₹X per month until you cancel" is Google's subscription policy, not
- *   a nicety: the terms have to be where the buyer taps, and an app that hides
- *   them behind the word "free" gets pulled.
+ *   price that will one day disagree with the one they are charged. The big
+ *   figure only drops a trailing ".00" from Play's own string; the per-day
+ *   line is arithmetic on Play's number and is hidden outside rupees.
+ * - **The charge is stated beside the button.** "Start 3 days free" and,
+ *   directly under it, "Then ₹X per month. Cancel anytime." is Google's
+ *   subscription policy, not a nicety: the terms have to be where the buyer
+ *   taps, and an app that hides them behind the word "free" gets pulled. That
+ *   line carries Play's price string untouched.
+ * - **The button is pinned; everything above it scrolls.** On a short phone
+ *   the list may run long, and the one control that matters must not be the
+ *   thing that falls off the bottom.
+ * - **One plan shows no plan picker.** A radio button with a single option is
+ *   a question with one answer. The picker appears when Play returns two.
  * - **Owner only.** Staff never reach this route; they see the ordinary
  *   "ask your manager" copy on `/pending`. A waiter who could subscribe could
  *   also subscribe by accident, on their own card.
@@ -44,7 +52,7 @@
  *   or Play returns nothing, the screen offers the WhatsApp path that worked
  *   before billing existed rather than dead-ending.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -75,16 +83,47 @@ import {
   type SubscriptionOffer,
 } from "@/lib/billing";
 import { feel } from "@/lib/feedback";
-import { colors, fonts, radius, shadow, space } from "@/theme/theme";
+import { formatMoney } from "@/lib/money";
+import {
+  colors,
+  currency,
+  fonts,
+  radius,
+  shadow,
+  space,
+} from "@/theme/theme";
 
-/** What one subscription buys. Every line is something the app does today —
- *  a paywall that promises a feature the owner then cannot find has spent the
- *  trust it was asking for. */
-const INCLUDED = [
-  "Tables, orders and kitchen tickets",
-  "Bills, GST and daily sales reports",
-  "Menu, offers and receipt printing",
-  "One subscription covers every device and staff login",
+/** What one subscription buys, as two columns read across. Every line is
+ *  something the app does today — a paywall that promises a feature the owner
+ *  then cannot find has spent the trust it was asking for. "Unlimited" is
+ *  true because nothing in the app or the rules caps staff or devices; if a
+ *  cap is ever added, these two lines go first. */
+const INCLUDED_LEFT = [
+  "Unlimited staff",
+  "Tables & takeaway",
+  "POS billing",
+  "Daily sales report",
+] as const;
+const INCLUDED_RIGHT = [
+  "Unlimited devices",
+  "Kitchen KOT",
+  "Receipt printing",
+  "24/7 customer support",
+] as const;
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ] as const;
 
 /** "P1M" → "per month". Play returns ISO 8601 durations. */
@@ -102,6 +141,42 @@ function periodLabel(period: string): string {
       return "per year";
     default:
       return "";
+  }
+}
+
+/** "P1M" → "/ month" — the unit beside the big price. */
+function periodUnit(period: string): string {
+  switch (period) {
+    case "P1W":
+      return "/ week";
+    case "P1M":
+      return "/ month";
+    case "P3M":
+      return "/ 3 months";
+    case "P6M":
+      return "/ 6 months";
+    case "P1Y":
+      return "/ year";
+    default:
+      return "";
+  }
+}
+
+/** "P1M" → 30. Only for the per-day line, so a month is a round thirty. */
+function periodDays(period: string): number {
+  switch (period) {
+    case "P1W":
+      return 7;
+    case "P1M":
+      return 30;
+    case "P3M":
+      return 90;
+    case "P6M":
+      return 180;
+    case "P1Y":
+      return 365;
+    default:
+      return 0;
   }
 }
 
@@ -132,17 +207,42 @@ function trialLabel(period: string): string {
   return `${n} ${unit}${n === 1 ? "" : "s"}`;
 }
 
+/** "P3D" → "11 October": the day the trial ends and the first charge lands. */
+function firstChargeLabel(period: string): string {
+  const m = /^P(\d+)([DWM])$/.exec(period);
+  if (!m) return "";
+  const n = Number(m[1]);
+  const d = new Date();
+  if (m[2] === "M") d.setMonth(d.getMonth() + n);
+  else d.setDate(d.getDate() + n * (m[2] === "W" ? 7 : 1));
+  return `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+
 function priceLine(offer: SubscriptionOffer): string {
   return `${offer.formattedPrice} ${periodLabel(offer.billingPeriod)}`.trim();
 }
 
-/** The full terms of the selected plan, as one sentence. */
-function termsLine(offer: SubscriptionOffer): string {
-  const trial = offer.trialPeriod ? trialLabel(offer.trialPeriod) : "";
-  const lead = trial
-    ? `Free for ${trial}, then ${priceLine(offer)}`
-    : priceLine(offer);
-  return `${lead} until you cancel. Billed by Google Play — cancel any time in the Play Store.`;
+/** "₹500.00" → "₹500". Play's string with a zero fraction dropped and nothing
+ *  else touched, for the two places a price is set large. */
+function shortPrice(offer: SubscriptionOffer): string {
+  return offer.formattedPrice.replace(/[.,]00$/, "");
+}
+
+function isRupees(offer: SubscriptionOffer): boolean {
+  return offer.currencyCode === currency.code;
+}
+
+/** "Less than ₹17 a day". Empty outside rupees — `formatMoney` only speaks
+ *  ₹ — and when Play gave us no number to divide. */
+function perDayLine(offer: SubscriptionOffer): string {
+  const days = periodDays(offer.billingPeriod);
+  if (!isRupees(offer) || !days || offer.priceMicros <= 0) return "";
+  // Micros are millionths of a rupee; paise are hundredths.
+  const paisePerDay = offer.priceMicros / 10000 / days;
+  const rupees = Math.ceil(paisePerDay / 100 - 1e-9);
+  // Rounded UP, so "less than" stays true — unless it divided exactly.
+  const exact = Math.abs(paisePerDay - rupees * 100) < 1e-6;
+  return `${exact ? "Just" : "Less than"} ${formatMoney(rupees * 100)} a day`;
 }
 
 export function SubscribeScreen() {
@@ -195,6 +295,11 @@ export function SubscribeScreen() {
   }, [available, restaurantId]);
 
   const chosen = offers?.find((o) => o.offerToken === selected) ?? null;
+  const trialPeriod = chosen?.trialPeriod ?? null;
+  const firstCharge = useMemo(
+    () => (trialPeriod ? firstChargeLabel(trialPeriod) : ""),
+    [trialPeriod],
+  );
 
   const onBuy = useCallback(async () => {
     if (!restaurantId || !chosen) return;
@@ -259,53 +364,77 @@ export function SubscribeScreen() {
 
   const loading = offers === null;
   const nothingToSell = !loading && offers.length === 0;
-  const trial = chosen?.trialPeriod ? trialLabel(chosen.trialPeriod) : "";
-  const place = restaurantName ?? "Your restaurant";
+  const trial = trialPeriod ? trialLabel(trialPeriod) : "";
+  const perDay = chosen ? perDayLine(chosen) : "";
 
   const heading = awaitingSubscription
-    ? `${place} is ready`
+    ? `${restaurantName ?? "Your restaurant"} is ready`
     : "Welcome back";
   const lede = awaitingSubscription
-    ? trial
-      ? `Try everything free for ${trial}. You won't be charged until the trial ends.`
-      : "Subscribe to open your restaurant and take your first order."
-    : "Your subscription has ended. Your menu, tables and settings are all still saved — subscribe to pick up exactly where you left off.";
+    ? "Everything you need to run your restaurant from your phone."
+    : `Subscribe to open ${restaurantName ?? "your restaurant"} again.`;
 
   return (
     <SafeAreaView style={styles.root}>
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <View style={styles.card}>
-          <View style={styles.badge}>
-            <Ionicons
-              name={awaitingSubscription ? "sparkles" : "lock-open-outline"}
-              size={26}
-              color={colors.primary}
-            />
-          </View>
-          <Text style={styles.title}>{heading}</Text>
-          <Text style={styles.lede}>{lede}</Text>
+      {/* Capped so a tablet shows a column, not a banner. */}
+      <View style={styles.column}>
+        <View style={styles.top}>
+          {awaitingSubscription ? (
+            <PressableScale
+              haptic="warn"
+              onPress={() => signOut()}
+              style={styles.topBtn}
+            >
+              <Text style={styles.topText}>Sign out</Text>
+            </PressableScale>
+          ) : (
+            <PressableScale
+              haptic="dismiss"
+              onPress={() =>
+                router.canGoBack() ? router.back() : router.replace("/pending")
+              }
+              style={styles.topBtn}
+            >
+              <Text style={styles.topText}>Back</Text>
+            </PressableScale>
+          )}
+        </View>
 
-          <View style={styles.included}>
-            {INCLUDED.map((line) => (
-              <View key={line} style={styles.includedRow}>
-                <Ionicons
-                  name="checkmark-circle"
-                  size={20}
-                  color={colors.saveGreen}
-                />
-                <Text style={styles.includedText}>{line}</Text>
-              </View>
-            ))}
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={styles.body}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.head}>
+            <Text style={styles.title}>{heading}</Text>
+            <Text style={styles.lede}>{lede}</Text>
           </View>
 
           {loading && (
-            <View style={styles.loading}>
+            <View style={styles.hero}>
               <ActivityIndicator color={colors.primary} />
               <Text style={styles.hint}>Checking with Google Play…</Text>
             </View>
           )}
 
+          {chosen && (
+            <View style={styles.hero}>
+              <View style={styles.amountRow}>
+                <Text style={styles.amount}>{shortPrice(chosen)}</Text>
+                <Text style={styles.amountUnit}>
+                  {periodUnit(chosen.billingPeriod)}
+                </Text>
+              </View>
+              {!!perDay && (
+                <View style={styles.perDay}>
+                  <Text style={styles.perDayText}>{perDay}</Text>
+                </View>
+              )}
+            </View>
+          )}
+
           {!loading &&
+            offers.length > 1 &&
             offers.map((offer) => {
               const on = offer.offerToken === selected;
               return (
@@ -342,6 +471,84 @@ export function SubscribeScreen() {
               );
             })}
 
+          <View style={styles.included}>
+            <Text style={styles.label}>Everything included</Text>
+            {/* Two columns sized to their own text and centred as one block,
+                so the list sits under its heading instead of hanging left. */}
+            <View style={styles.includedCols}>
+              {[INCLUDED_LEFT, INCLUDED_RIGHT].map((col) => (
+                <View key={col[0]} style={styles.includedCol}>
+                  {col.map((line) => (
+                    <View key={line} style={styles.includedRow}>
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={18}
+                        color={colors.saveGreen}
+                      />
+                      <Text style={styles.includedText}>{line}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+          </View>
+
+          {chosen && !!trial && !!firstCharge && (
+            <View style={styles.trial}>
+              <Text style={[styles.label, styles.trialLabel]}>
+                How your free trial works
+              </Text>
+              <View style={styles.step}>
+                <View style={styles.rail}>
+                  <View style={[styles.mark, styles.markOn]}>
+                    <Ionicons
+                      name="lock-open"
+                      size={16}
+                      color={colors.textInverse}
+                    />
+                  </View>
+                  <View style={styles.railLine} />
+                </View>
+                <View style={[styles.stepBody, styles.stepBodyFirst]}>
+                  <Text style={styles.stepTitle}>Today</Text>
+                  <Text style={styles.stepSub}>Everything unlocked</Text>
+                </View>
+                <View style={styles.freePill}>
+                  <Text style={styles.freePillText}>
+                    {isRupees(chosen) ? formatMoney(0) : "Free"}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.step}>
+                <View style={styles.rail}>
+                  <View style={styles.mark}>
+                    <Ionicons
+                      name="calendar-outline"
+                      size={16}
+                      color={colors.primary}
+                    />
+                  </View>
+                </View>
+                <View style={styles.stepBody}>
+                  <Text style={styles.stepTitle}>{firstCharge}</Text>
+                  <Text style={styles.stepSub}>Your plan starts</Text>
+                </View>
+                <Text style={styles.stepAmount}>{shortPrice(chosen)}</Text>
+              </View>
+            </View>
+          )}
+
+          {!awaitingSubscription && (
+            <Text style={styles.saved}>
+              Your menu, tables and bills are saved.
+            </Text>
+          )}
+        </ScrollView>
+
+        <View style={[styles.foot, loading && styles.footEmpty]}>
+          {error &&<Text style={styles.error}>{error}</Text>}
+          {notice && <Text style={styles.hint}>{notice}</Text>}
+
           {chosen && (
             <>
               <PressableScale
@@ -360,12 +567,12 @@ export function SubscribeScreen() {
                       : "Subscribe"}
                 </Text>
               </PressableScale>
-              <Text style={styles.hint}>{termsLine(chosen)}</Text>
+              <Text style={styles.hint}>
+                {trial ? `Then ${priceLine(chosen)}. ` : `${priceLine(chosen)}. `}
+                <Text style={styles.hintStrong}>Cancel anytime.</Text>
+              </Text>
             </>
           )}
-
-          {error && <Text style={styles.error}>{error}</Text>}
-          {notice && <Text style={styles.hint}>{notice}</Text>}
 
           {/* The pre-billing path, kept as the fallback. An owner on an older
               build, or one Play cannot sell to, must still have a way in. */}
@@ -394,84 +601,175 @@ export function SubscribeScreen() {
               Please update Smart Serve from the Play Store.
             </Text>
           )}
-
-          {awaitingSubscription ? (
-            <PressableScale
-              haptic="warn"
-              onPress={() => signOut()}
-              style={styles.footBtn}
-            >
-              <Text style={styles.footText}>Sign out</Text>
-            </PressableScale>
-          ) : (
-            <PressableScale
-              haptic="dismiss"
-              onPress={() =>
-                router.canGoBack() ? router.back() : router.replace("/pending")
-              }
-              style={styles.footBtn}
-            >
-              <Text style={styles.footText}>Back</Text>
-            </PressableScale>
-          )}
         </View>
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
-  scroll: {
-    flexGrow: 1,
-    justifyContent: "center",
-    padding: space.s5,
+  root: { flex: 1, backgroundColor: colors.surface },
+  column: { flex: 1, width: "100%", maxWidth: 480, alignSelf: "center" },
+  top: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    paddingHorizontal: space.s2,
   },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: radius.xl,
-    padding: space.s6,
-    gap: space.s3,
-    // Cap the width so a tablet shows a card, not a banner.
-    width: "100%",
-    maxWidth: 480,
-    alignSelf: "center",
-    ...shadow.card,
+  topBtn: { padding: space.s3 },
+  topText: {
+    fontFamily: fonts.bold,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textMuted,
   },
-  badge: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.pill,
-    backgroundColor: colors.primarySoft,
-    alignItems: "center",
-    justifyContent: "center",
-    alignSelf: "center",
+  scroll: { flex: 1 },
+  body: {
+    paddingHorizontal: space.s5,
+    paddingBottom: space.s5,
+    gap: space.s5,
   },
+  head: { gap: space.s1 },
   title: {
     fontFamily: fonts.extrabold,
-    fontSize: 24,
-    lineHeight: 30,
-    letterSpacing: -0.3,
+    fontSize: 25,
+    lineHeight: 31,
+    letterSpacing: -0.4,
     color: colors.text,
     textAlign: "center",
   },
   lede: {
     fontFamily: fonts.regular,
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 14,
+    lineHeight: 20,
     color: colors.textMuted,
     textAlign: "center",
   },
-  included: { gap: space.s2, paddingVertical: space.s2 },
+  // The price is the hero: centred, in its own tinted panel.
+  hero: {
+    backgroundColor: colors.primarySoft,
+    borderWidth: 1,
+    borderColor: colors.offerBorder,
+    borderRadius: radius.xl,
+    paddingVertical: space.s5,
+    paddingHorizontal: space.s4,
+    alignItems: "center",
+    gap: space.s2,
+  },
+  amountRow: { flexDirection: "row", alignItems: "baseline", gap: space.s2 },
+  amount: {
+    fontFamily: fonts.extrabold,
+    fontSize: 48,
+    lineHeight: 56,
+    letterSpacing: -1.2,
+    color: colors.primary,
+  },
+  amountUnit: {
+    fontFamily: fonts.bold,
+    fontSize: 16,
+    lineHeight: 22,
+    color: colors.primary,
+  },
+  perDay: {
+    backgroundColor: colors.saveGreen,
+    borderRadius: radius.pill,
+    paddingVertical: space.s1,
+    paddingHorizontal: space.s3,
+  },
+  perDayText: {
+    fontFamily: fonts.bold,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textInverse,
+  },
+  label: {
+    fontFamily: fonts.extrabold,
+    fontSize: 12,
+    lineHeight: 16,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    color: colors.textMuted,
+    textAlign: "center",
+  },
+  included: { gap: space.s3 },
+  includedCols: {
+    flexDirection: "row",
+    justifyContent: "center",
+    gap: space.s4,
+  },
+  includedCol: { gap: space.s3, flexShrink: 1 },
   includedRow: { flexDirection: "row", alignItems: "center", gap: space.s2 },
   includedText: {
-    flex: 1,
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    lineHeight: 20,
+    flexShrink: 1,
+    fontFamily: fonts.semibold,
+    fontSize: 13,
+    lineHeight: 18,
     color: colors.text,
   },
-  loading: { alignItems: "center", gap: space.s2, paddingVertical: space.s4 },
+  trial: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    padding: space.s4,
+  },
+  trialLabel: { textAlign: "left", marginBottom: space.s3 },
+  step: { flexDirection: "row", gap: space.s3 },
+  rail: { width: 32, alignItems: "center" },
+  mark: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primarySoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  markOn: { backgroundColor: colors.saveGreen },
+  railLine: { flex: 1, width: 2, backgroundColor: colors.offerBorder },
+  stepBody: { flex: 1 },
+  // The gap between the two steps lives here, so the rail's line has a
+  // height to stretch across.
+  stepBodyFirst: { paddingBottom: space.s4 },
+  stepTitle: {
+    fontFamily: fonts.extrabold,
+    fontSize: 14,
+    lineHeight: 18,
+    color: colors.text,
+  },
+  stepSub: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textMuted,
+  },
+  freePill: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.saveGreenSoft,
+    borderRadius: radius.pill,
+    paddingVertical: space.s1,
+    paddingHorizontal: space.s3,
+  },
+  freePillText: {
+    fontFamily: fonts.extrabold,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.saveGreen,
+  },
+  stepAmount: {
+    fontFamily: fonts.extrabold,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+    paddingVertical: space.s1,
+  },
+  saved: {
+    fontFamily: fonts.semibold,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.text,
+    textAlign: "center",
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: space.s4,
+  },
   planOuter: { alignSelf: "stretch" },
   plan: {
     flexDirection: "row",
@@ -512,17 +810,28 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: colors.saveGreen,
   },
-  ctaOuter: { alignSelf: "stretch", marginTop: space.s2 },
+  foot: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingHorizontal: space.s5,
+    paddingTop: space.s4,
+    paddingBottom: space.s4,
+    gap: space.s3,
+  },
+  // Nothing to pin until Play has answered — no rule across an empty bar.
+  footEmpty: { borderTopWidth: 0, paddingTop: 0 },
+  ctaOuter: { alignSelf: "stretch" },
   cta: {
     backgroundColor: colors.primary,
     borderRadius: radius.md,
     paddingVertical: space.s4,
     paddingHorizontal: space.s6,
     alignItems: "center",
+    ...shadow.glow,
   },
   ctaText: {
     fontFamily: fonts.extrabold,
-    fontSize: 16,
+    fontSize: 17,
     lineHeight: 22,
     color: colors.textInverse,
   },
@@ -541,11 +850,5 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: "center",
   },
-  footBtn: { alignSelf: "center", padding: space.s3 },
-  footText: {
-    fontFamily: fonts.bold,
-    fontSize: 15,
-    lineHeight: 20,
-    color: colors.textMuted,
-  },
+  hintStrong: { fontFamily: fonts.bold, color: colors.text },
 });
