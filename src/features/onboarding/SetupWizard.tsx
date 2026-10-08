@@ -55,6 +55,7 @@ import {
   type BusinessType,
   type SetupAnswers,
 } from "./setupTypes";
+import { WelcomeHero } from "./WelcomeHero";
 
 /** How long an answer stays lit before the next card arrives. Under ~120ms
  *  the tint never registers and the card looks like it swapped by itself. */
@@ -371,25 +372,28 @@ export function SetupWizard({
  * Smart Serve.
  *
  * It has to answer "what IS this?" before it asks for anything, because the
- * Play listing is the only salesperson this product has. So the card leads
- * with what the software is — a restaurant POS and billing system — and
- * proves it with four lines naming the four things it does, rather than
- * opening on a bare "Welcome" that assumes the reader already knows.
+ * Play listing is the only salesperson this product has. So the card names
+ * the product, says what it is in the headline's second line, and then SHOWS
+ * it — a phone with a week of sales on it (`WelcomeHero`) over a row of tiles
+ * naming the five things it does — rather than opening on a bare "Welcome"
+ * that assumes the reader already knows.
+ *
+ * It used to be a logo in a disc over a four-line list. The list was
+ * accurate and nobody is sold by a list; the picture is what an owner
+ * recognises as the thing they came for.
  *
  * `revisit` is the exception: Account → How you work is not a first meeting,
- * so it gets neither the pitch nor the feature list.
+ * so it gets neither the pitch nor the picture.
  */
 const WELCOME_FEATURES: {
   icon: React.ComponentProps<typeof MaterialCommunityIcons>["name"];
-  text: string;
+  label: string;
 }[] = [
-  {
-    icon: "silverware-fork-knife",
-    text: "Take orders at the table or the counter",
-  },
-  { icon: "chef-hat", text: "Send them straight to the kitchen" },
-  { icon: "receipt", text: "Print the bill, with GST, in a tap" },
-  { icon: "chart-line", text: "See what sold and what it made" },
+  { icon: "silverware-fork-knife", label: "Orders" },
+  { icon: "chef-hat", label: "Kitchen" },
+  { icon: "receipt", label: "Billing" },
+  { icon: "chart-line", label: "Reports" },
+  { icon: "tag-outline", label: "Offers" },
 ];
 
 function WelcomeCard({
@@ -403,60 +407,62 @@ function WelcomeCard({
 }) {
   const isRevisit = mode === "revisit";
 
-  /**
-   * FIRST RUN HAS NO BODY LINE, and that is the point.
-   *
-   * It used to read "Point of sale, kitchen tickets, billing and reports" —
-   * the same four things the feature list below says, in the same order, one
-   * scroll-length earlier. The list says them better: it has icons, and it
-   * describes what the OWNER does rather than naming four modules. Saying it
-   * twice cost the three lines that were pushing the last feature and the
-   * button off the bottom of a phone.
-   *
-   * The tour keeps a sentence because it is read by someone who has never
-   * heard of the product and needs one plain claim before a list of details.
-   */
-  const body = isRevisit
-    ? "Answer these again to re-shape the app. Your menu, tables and bills are not touched."
-    : mode === "tour"
-      ? "Smart Serve runs the whole floor — point of sale, kitchen tickets, billing and reports — on one tablet."
-      : null;
-
   return (
     <View style={styles.welcome}>
-      {/* The mark in a soft navy halo. A logo floating on the canvas reads as
-          a placeholder; sitting it in a disc gives the screen a subject. */}
-      <View style={styles.brandHalo}>
-        <BrandMark size={52} />
-      </View>
+      {isRevisit ? (
+        <>
+          {/* The mark in a soft navy halo. A logo floating on the canvas
+              reads as a placeholder; sitting it in a disc gives the screen a
+              subject. */}
+          <View style={styles.brandHalo}>
+            <BrandMark size={52} />
+          </View>
+          <Text style={styles.welcomeTitle}>How you work</Text>
+          <Text style={styles.welcomeBody}>
+            Answer these again to re-shape the app. Your menu, tables and bills
+            are not touched.
+          </Text>
+        </>
+      ) : (
+        <>
+          <View style={styles.lockup}>
+            <BrandMark size={34} />
+            <Text style={styles.lockupText} allowFontScaling={false}>
+              Smart Serve
+            </Text>
+          </View>
 
-      {!isRevisit && (
-        <View style={styles.eyebrow}>
-          <Text style={styles.eyebrowText}>ALL-IN-ONE RESTAURANT POS</Text>
-        </View>
-      )}
+          {/* Two Texts, not one with a nested span: the break between the
+              lines is the design, and a single wrapped string would put it
+              wherever the screen width happened to. */}
+          <View>
+            <Text style={styles.welcomeTitle}>Welcome to Smart Serve</Text>
+            <Text style={[styles.welcomeTitle, styles.welcomeTitleAccent]}>
+              Your Restaurant Software
+            </Text>
+          </View>
 
-      <Text style={styles.welcomeTitle}>
-        {isRevisit ? "How you work" : "Welcome to Smart Serve"}
-      </Text>
+          <WelcomeHero />
 
-      {body ? <Text style={styles.welcomeBody}>{body}</Text> : null}
-
-      {!isRevisit && (
-        <View style={styles.features}>
-          {WELCOME_FEATURES.map((f) => (
-            <View key={f.text} style={styles.featureRow}>
-              <View style={styles.featureIcon}>
+          <View style={styles.tiles}>
+            {WELCOME_FEATURES.map((f) => (
+              <View key={f.label} style={styles.tile}>
                 <MaterialCommunityIcons
                   name={f.icon}
-                  size={17}
+                  size={21}
                   color={colors.primary}
                 />
+                <Text style={styles.tileText} numberOfLines={1}>
+                  {f.label}
+                </Text>
               </View>
-              <Text style={styles.featureText}>{f.text}</Text>
-            </View>
-          ))}
-        </View>
+            ))}
+          </View>
+
+          <Text style={styles.welcomeBody}>
+            Take orders, bill tables and track your business from your phone.
+          </Text>
+        </>
       )}
 
       <PressableScale
@@ -468,7 +474,7 @@ function WelcomeCard({
         accessibilityRole="button"
       >
         <Text style={styles.ctaText}>
-          {mode === "tour" ? "Set it up for my place" : "Set up my app"}
+          {isRevisit ? "Set up my app" : "Set up your app"}
         </Text>
         <MaterialCommunityIcons
           name="arrow-right"
@@ -782,51 +788,36 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // The category line. It is the one place the app names what it IS, so it
-  // is set apart from the prose rather than buried in it.
-  eyebrow: {
-    backgroundColor: colors.primarySoft,
-    borderWidth: 1,
-    borderColor: colors.offerBorder,
-    borderRadius: radius.pill,
-    paddingVertical: space.s1 + 2,
-    paddingHorizontal: space.s3,
-  },
-  eyebrowText: {
-    fontFamily: fonts.bold,
-    fontSize: 11,
-    letterSpacing: 1.1,
+  // The mark beside the wordmark, as on the brand bar — the first card is
+  // where the app introduces itself, so it carries the name, not just the
+  // cloche.
+  lockup: { flexDirection: "row", alignItems: "center", gap: space.s2 },
+  lockupText: {
+    fontFamily: fonts.extrabold,
+    fontSize: 23,
+    letterSpacing: 0.1,
     color: colors.primary,
+    includeFontPadding: false,
   },
+  welcomeTitleAccent: { color: colors.primary, marginTop: 0 },
 
-  // Four lines that prove the sentence above them. Left-aligned inside a
-  // centred card on purpose: a list is read down its left edge, and centring
-  // four ragged lines is what makes a welcome screen look like a poster.
-  features: {
-    alignSelf: "stretch",
+  // Five across, each a word and a picture. They name what the app does; the
+  // phone above them is what makes anyone care.
+  tiles: { alignSelf: "stretch", flexDirection: "row", gap: space.s2 },
+  tile: {
+    flex: 1,
+    alignItems: "center",
+    gap: space.s1,
     backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: space.s4,
-    gap: space.s3,
-    marginTop: space.s1,
+    borderRadius: radius.md,
+    paddingTop: space.s2 + 1,
+    paddingBottom: space.s2,
+    paddingHorizontal: 2,
     ...shadow.card,
   },
-  featureRow: { flexDirection: "row", alignItems: "center", gap: space.s3 },
-  featureIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: radius.sm,
-    backgroundColor: colors.primarySoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  featureText: {
-    flex: 1,
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    lineHeight: 19,
+  tileText: {
+    fontFamily: fonts.semibold,
+    fontSize: 10,
     color: colors.text,
   },
 

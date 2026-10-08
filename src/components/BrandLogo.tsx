@@ -12,7 +12,7 @@ import Svg, { Path, Rect } from "react-native-svg";
 import { colors, fonts } from "@/theme/theme";
 
 /** Four-point sparkle: control points at 0.24r give the pinched waist. */
-function sparklePath(cx: number, cy: number, r: number): string {
+export function sparklePath(cx: number, cy: number, r: number): string {
   const k = r * 0.24;
   return (
     `M ${cx} ${cy - r} ` +
