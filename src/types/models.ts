@@ -160,6 +160,10 @@ export interface RestaurantProfile {
     /** The end of the period already paid for (or of the free trial).
      *  `expiresAt` sits a little after this while `autoRenew` is true. */
     paidThrough?: Ts;
+    /** Play's raw state at the last write, e.g.
+     *  "SUBSCRIPTION_STATE_IN_GRACE_PERIOD". Lets the app say "your card was
+     *  declined" instead of "active" or "ended". Absent on older writes. */
+    state?: string;
   };
   updatedAt: Ts;
 }

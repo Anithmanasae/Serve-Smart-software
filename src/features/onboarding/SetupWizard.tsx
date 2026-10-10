@@ -46,6 +46,7 @@ import { MaterialCommunityIcons } from "@expo/vector-icons";
 import { PressableScale } from "@/components/PressableScale";
 import { ScreenEnter } from "@/components/ScreenEnter";
 import { BrandMark } from "@/components/BrandLogo";
+import { isBillingAvailable } from "@/lib/billing";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import {
   BUSINESS_TYPES,
@@ -603,7 +604,11 @@ function DoneCard({
         {mode === "firstRun"
           ? "We'll send a couple of tips while you find your way around. Everything here can be changed later in Account."
           : mode === "tour"
-            ? "Free to start. No card needed, and everything here can be changed later."
+            ? // "No card needed" only on a build that cannot sell — one that can
+              // puts Google Play's payment sheet two screens after this line.
+              isBillingAvailable()
+              ? "Everything here can be changed later."
+              : "Free to start. No card needed, and everything here can be changed later."
             : "All of this can be changed later in Account."}
       </Text>
     </View>

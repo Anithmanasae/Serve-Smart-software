@@ -68,6 +68,10 @@ export interface PurchaseResult {
   /** True when Play accepted the order but has not been paid yet. Nothing is
    *  owed to the buyer in this state and the token must not be acknowledged. */
   pending: boolean;
+  /** True when Play refused the sale because this Google account already
+   *  holds the subscription, and this is that existing purchase handed back.
+   *  It may have been bought for a DIFFERENT restaurant. */
+  alreadyOwned?: boolean;
 }
 
 /** One buyable base plan, already formatted for display by Play. */
@@ -94,6 +98,9 @@ export interface SubscriptionOffer {
 let iap: IapModule | null = null;
 let resolved = false;
 let connected = false;
+/** In-flight open / close, so a mount racing an unmount waits its turn. */
+let opening: Promise<boolean> | null = null;
+let closing: Promise<void> | null = null;
 
 /**
  * Resolve the native module once. `available` stays false forever on a build
@@ -127,13 +134,29 @@ export function isNativeBillingAvailable(): boolean {
 export async function connect(): Promise<boolean> {
   const mod = load();
   if (!mod) return false;
+  // A close still in flight belongs to the screen that just unmounted. Let it
+  // land first, or it lands on top of the connection opened below.
+  if (closing) await closing;
   if (connected) return true;
-  try {
-    connected = (await mod.initConnection()) === true;
-    return connected;
-  } catch {
-    return false;
-  }
+  // One open at a time: the subscribe screen's restore and its price list both
+  // call this, and so does a second mount racing the first.
+  opening ??= mod
+    .initConnection()
+    .then(
+      (ok) => {
+        connected = ok === true;
+        if (!connected) console.warn("[billing] Play connection refused.");
+        return connected;
+      },
+      (e) => {
+        console.warn("[billing] Play connection failed:", e);
+        return false;
+      },
+    )
+    .finally(() => {
+      opening = null;
+    });
+  return opening;
 }
 
 /** A phase Play charges nothing for — the free trial, when there is one. */
@@ -190,8 +213,14 @@ export async function fetchOffers(): Promise<SubscriptionOffer[]> {
         byPlan.set(plan, offer);
       }
     }
+    if (byPlan.size === 0) {
+      console.warn(
+        `[billing] Play returned no offers for "${SUBSCRIPTION_ID}" (${(products ?? []).length} product(s)).`,
+      );
+    }
     return [...byPlan.values()];
-  } catch {
+  } catch (e) {
+    console.warn("[billing] fetching offers failed:", e);
     return [];
   }
 }
@@ -253,10 +282,38 @@ export async function purchase(
       const owned = (await getExistingPurchases()).find(
         (p) => p.productId === SUBSCRIPTION_ID,
       );
-      if (owned) return owned;
+      if (owned) return { ...owned, alreadyOwned: true };
     }
     throw e;
   }
+}
+
+/**
+ * What to tell the owner when Play's sheet ended in an error.
+ *
+ * The library's own messages describe the Billing API, not what happened:
+ * a DECLINED CARD comes back as `billing-unavailable`, whose text is "Billing
+ * API version is not supported" — shown raw, that told an owner whose card had
+ * just been refused that their phone was too old. Play has already put the
+ * real reason on its own sheet, so these only need to be true and point at
+ * the Play Store.
+ */
+export function describePurchaseError(e: unknown): string {
+  const mod = load();
+  const code = (e as { code?: string })?.code;
+  if (mod && code) {
+    const C = mod.ErrorCode;
+    if (code === C.NetworkError || code === C.ServiceError) {
+      return "Couldn't reach Google Play. Check your internet connection and try again.";
+    }
+    if (code === C.BillingUnavailable || code === C.PurchaseError) {
+      return "Google Play couldn't complete the payment. Check your payment method in the Play Store, then try again.";
+    }
+    if (code === C.ItemUnavailable) {
+      return "This subscription isn't available on your Google account right now. Please try again later.";
+    }
+  }
+  return "Google Play couldn't complete the purchase. Please try again.";
 }
 
 /**
@@ -308,11 +365,20 @@ export async function acknowledge(purchaseToken: string): Promise<void> {
 export async function disconnect(): Promise<void> {
   const mod = load();
   if (!mod || !connected) return;
-  try {
-    await mod.endConnection();
-  } catch {
-    /* ignore */
-  } finally {
-    connected = false;
-  }
+  // Cleared BEFORE the await, not after it. The post-signup redirects mount
+  // the subscribe screen, unmount it and mount it again inside a second; with
+  // the flag still up, the second mount believed it was connected, asked a
+  // closing connection for the price list, got nothing, and told a brand-new
+  // owner that subscriptions were not available.
+  connected = false;
+  closing = mod
+    .endConnection()
+    .then(
+      () => undefined,
+      () => undefined,
+    )
+    .finally(() => {
+      closing = null;
+    });
+  await closing;
 }

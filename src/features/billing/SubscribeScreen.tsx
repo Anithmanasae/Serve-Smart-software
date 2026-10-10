@@ -266,6 +266,7 @@ export function SubscribeScreen() {
   // waiting to be paid for is not something the owner did wrong.
   const [notice, setNotice] = useState<string | null>(null);
   const available = isBillingAvailable();
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -292,7 +293,14 @@ export function SubscribeScreen() {
       cancelled = true;
       closeBilling();
     };
-  }, [available, restaurantId]);
+  }, [available, restaurantId, attempt]);
+
+  // An empty price list is as often a slow Play Store as a real "cannot
+  // sell", and without this the only way to ask again was to restart the app.
+  const onRetry = useCallback(() => {
+    setOffers(null);
+    setAttempt((n) => n + 1);
+  }, []);
 
   const chosen = offers?.find((o) => o.offerToken === selected) ?? null;
   const trialPeriod = chosen?.trialPeriod ?? null;
@@ -595,6 +603,17 @@ export function SubscribeScreen() {
             </>
           )}
 
+          {nothingToSell && available && (
+            <PressableScale
+              haptic="tap"
+              onPress={onRetry}
+              style={styles.topBtn}
+              accessibilityRole="button"
+            >
+              <Text style={styles.topText}>Try again</Text>
+            </PressableScale>
+          )}
+
           {nothingToSell && !hasContact && (
             <Text style={styles.hint}>
               Subscriptions aren&apos;t available on this version of the app.
@@ -624,6 +643,11 @@ const styles = StyleSheet.create({
   },
   scroll: { flex: 1 },
   body: {
+    // Centred when it is shorter than the screen (no trial card on a tall
+    // phone), so the gap is shared above and below instead of pooling in a
+    // blank half-screen over the button.
+    flexGrow: 1,
+    justifyContent: "center",
     paddingHorizontal: space.s5,
     paddingBottom: space.s5,
     gap: space.s5,

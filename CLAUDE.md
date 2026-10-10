@@ -165,9 +165,10 @@ The load-bearing decisions:
   `autoRenewEnabled`; a cancelled, held, expired or refunded subscription is
   written with the true date and no slack.
 - **`subscription` on the restaurant doc is DISPLAY ONLY.** The functions
-  write `{ autoRenew, paidThrough }` beside `expiresAt` so the Account card
-  can say "Renews on 8 Nov" instead of counting down to a date that is about
-  to move. Nothing gates on it, and it is not an `isPaid` flag: access is
+  write `{ autoRenew, paidThrough, state }` beside `expiresAt` so the Account
+  card can say "Renews on 8 Nov" instead of counting down to a date that is
+  about to move, and so a declined card reads as "Payment failed" (grace
+  period) or "on hold" (`/pending`) rather than "active" or "ended". Nothing gates on it, and it is not an `isPaid` flag: access is
   `expiresAt` and nothing else. A deadline set by hand leaves it stale, which
   is why `TrialStatusCard` checks it still describes the deadline in force.
 - **Reaching Google failing is never "not entitled".** `verifyPurchase` throws
@@ -262,10 +263,12 @@ The load-bearing decisions:
   same paywall. See "THERE IS NO FREE TRIAL OF OURS" above.
 - **The restaurant name and phone are collected BEFORE the picker opens.**
   Google gives us a person; the app needs a business and a number to ring. So
-  the signup form puts those two fields above the fork and the email-only
-  fields (name, address, password) below it. A button that authenticates
-  someone and then complains about an empty text box is the failure this
-  layout exists to prevent.
+  `/signup` is three steps on one route — the restaurant (name + phone), then
+  the fork (Google or email), then the email-only fields (name, address,
+  password) for those who chose email. A button that authenticates someone
+  and then complains about an empty text box is the failure this order exists
+  to prevent. It was one long page first; the Google button halfway down six
+  boxes read as part of a single form, and owners found it confusing.
 - **`signupInProgress` goes up BEFORE `signInWithCredential`, not after.**
   `onAuthStateChanged` fires the moment the credential lands and a new Google
   account has no `userIndex` yet — without the flag AuthContext concludes "not
@@ -644,6 +647,13 @@ The load-bearing decisions:
   the software looks like it belongs to them. It also says plainly that
   nothing was saved, because leaving someone to wonder whether ₹180 is now in
   their figures is a small betrayal at the exact moment trust is being built.
+- **The receipt's headline is the TIME it took, and confetti follows the
+  slip.** "You just took a whole order in 40 seconds" is the one figure on
+  the page the owner did not type — a measurement of them, not of an order
+  they invented — so it does not repeat the old card's mistake. It is dropped
+  past two minutes (the tablet was put down). `components/Confetti.tsx` is
+  one native-driver value, takes no touches, and is skipped entirely under
+  Reduce Motion.
 - **The run is offered ONCE, however it ends.** Somebody who skipped out has
   said they do not want it; re-offering next launch is how a helpful screen
   becomes a nuisance. It lives for ever in Account → How to use Smart Serve,

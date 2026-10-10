@@ -35,6 +35,8 @@ export default function Pending() {
     restaurantName,
     config,
     awaitingSubscription,
+    restaurant,
+    accessEndsAt,
   } = useAuth();
 
   if (loading) return <BrandSplash />;
@@ -73,6 +75,18 @@ export default function Pending() {
   // `gatedRole`, not `role` — the whole point of this screen is that the
   // account is not usable, so `role` is already null here.
   const isOwner = gatedRole === "cashier";
+
+  // Account hold: the grace period ran out with the card still declined.
+  // Google keeps the subscription for the owner to repair, so the fastest
+  // way back is fixing the payment, not buying again — and "your access has
+  // ended" never mentions a payment at all. `subscription` is display-only
+  // and goes stale under a deadline set by hand, hence the check that it is
+  // still the write that set this deadline.
+  const paidThroughMs = restaurant?.subscription?.paidThrough?.toMillis();
+  const onHold =
+    restaurant?.subscription?.state === "SUBSCRIPTION_STATE_ON_HOLD" &&
+    paidThroughMs !== undefined &&
+    paidThroughMs === accessEndsAt;
 
   const copy = {
     pending: {
@@ -114,7 +128,9 @@ export default function Pending() {
           // reading "get in touch to activate" will either call you or put a
           // restaurant on their own card.
           body: isOwner
-            ? "Your menu, tables and settings are all still saved — nothing has been deleted. Subscribe to pick up exactly where you left off."
+            ? onHold
+              ? "Google Play couldn't charge your payment method, so your subscription is on hold. Fix it in the Play Store under Payments and subscriptions and this screen unlocks by itself — or start a new subscription below. Nothing has been deleted."
+              : "Your menu, tables and settings are all still saved — nothing has been deleted. Subscribe to pick up exactly where you left off."
             : "Smart Serve is locked for this restaurant until the owner renews it. Nothing has been deleted — everything is exactly where you left it. Let your manager know.",
         },
   }[gate];

@@ -94,6 +94,13 @@ const ACCESS_ENDED_MESSAGE =
   "Your access to Smart Serve has ended. Everything you set up is still " +
   "saved — get in touch to reactivate your restaurant.";
 
+// Shown when a launch could not reach the backend at all. Without it an
+// offline tablet sat on the splash and then showed a bare "Sign in to
+// continue" — to somebody who was signed in and had done nothing wrong.
+const UNREACHABLE_MESSAGE =
+  "Couldn't reach Smart Serve. Check your internet connection — the app " +
+  "opens by itself as soon as you're back online.";
+
 /** setTimeout stores its delay in a signed 32-bit int; anything larger
  *  overflows and fires IMMEDIATELY. Re-arm in chunks no bigger than this. */
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
@@ -107,6 +114,11 @@ const MAX_TIMEOUT_MS = 2 ** 31 - 1;
  * screen forever. See `armResolveTimer`.
  */
 const AUTH_RESOLVE_TIMEOUT_MS = 20_000;
+
+/** How many times the restaurant listener is re-attached (1s, 2s, 4s apart)
+ *  before its failure is accepted as "no restaurant doc" and the app opens on
+ *  defaults. It keeps retrying after that, more slowly. */
+const RESTAURANT_RETRIES = 3;
 
 /** Dev-build fallback tenant for logins that predate userIndex (migration). */
 function devFallbackRestaurantId(): string | null {
@@ -303,9 +315,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    *
    * The profile listener used to clear `loading` on its own, so that window
    * was open on every launch. Now nothing downstream sees a config until the
-   * restaurant doc has answered. An ERROR counts as an answer — DEFAULT_CONFIG
-   * is the right fallback once we know we cannot do better, and holding the
-   * splash for ever on an offline tablet would be the worse failure.
+   * restaurant doc has answered. A REPEATED error counts as an answer —
+   * DEFAULT_CONFIG is the right fallback once we know we cannot do better,
+   * and holding the splash for ever on an offline tablet would be the worse
+   * failure. A single one does not: see where the listener is attached.
    */
   const [restaurantAnswered, setRestaurantAnswered] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -352,10 +365,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRawProfile(null);
         setDocMissing(false);
         setLoading(false);
+        setNotice(UNREACHABLE_MESSAGE);
         // Nothing is coming. Stop holding the splash for a restaurant doc
         // that is never going to answer either.
         setRestaurantAnswered(true);
       }, AUTH_RESOLVE_TIMEOUT_MS);
+    };
+
+    /** The restaurant listener AND its pending re-attach — see where it is
+     *  attached. Dropping one without the other leaves a timer that re-opens
+     *  a listener for a login that has already gone. */
+    let restaurantRetry: ReturnType<typeof setTimeout> | null = null;
+    const stopRestaurant = () => {
+      if (restaurantRetry) {
+        clearTimeout(restaurantRetry);
+        restaurantRetry = null;
+      }
+      unsubRestaurant?.();
+      unsubRestaurant = null;
     };
 
     const unsubAuth = onAuthStateChanged(auth, (user) => {
@@ -363,8 +390,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       unsubIndex = null;
       unsubProfile?.();
       unsubProfile = null;
-      unsubRestaurant?.();
-      unsubRestaurant = null;
+      stopRestaurant();
       clearResolveTimer();
       sawProfile = false;
       profileRid = null;
@@ -426,6 +452,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (snap.exists()) {
               clearResolveTimer();
               sawProfile = true;
+              // We are through. A "couldn't reach" notice left standing would
+              // greet the next sign-out with news of an outage long over.
+              setNotice((n) => (n === UNREACHABLE_MESSAGE ? null : n));
               setRawProfile({ ...snap.data(), uid: user.uid });
               setDocMissing(false);
               setLoading(false);
@@ -473,24 +502,50 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // The workspace's expiry clock. Live, because activation is a WRITE to
         // this doc — the moment the owner is activated, every signed-in device
         // in the restaurant unblocks without a restart.
-        unsubRestaurant?.();
-        unsubRestaurant = onSnapshot(
-          paths.restaurantProfile(),
-          (snap) => {
-            setRestaurantDoc(snap.exists() ? snap.data() : null);
-            // An answer, either way — see `restaurantAnswered`. A miss is as
-            // much of an answer as a doc: it means DEFAULT_CONFIG is the truth
-            // here, rather than a guess we have not checked yet.
-            setRestaurantAnswered(true);
-          },
-          (e) => {
-            // Unreadable (offline, or not a member). Fall back to the account
-            // field alone rather than locking someone out on a network blip.
-            console.warn("[auth] failed to load restaurant profile:", e);
-            setRestaurantDoc(null);
-            setRestaurantAnswered(true);
-          },
-        );
+        //
+        // AN ERRORED LISTENER IS DEAD, so it is re-attached — this is what
+        // the paywall depends on. The rules let a member read this doc
+        // (`isMember()`: their users/{uid} doc exists), and at SIGNUP the
+        // listen can reach the server a beat before the registration batch
+        // that creates that doc. The read is refused, and the handler used to
+        // null the doc and stop there: no `expiresAt`, no `needsSetup`, for
+        // the rest of the session. A brand-new owner walked past the paywall
+        // AND the setup wizard into an empty app where every write failed,
+        // and only a restart put it right. Whether it happened was a race,
+        // which is why it came and went between builds.
+        stopRestaurant();
+        let attempts = 0;
+        const listenRestaurant = () => {
+          unsubRestaurant?.();
+          unsubRestaurant = onSnapshot(
+            paths.restaurantProfile(),
+            (snap) => {
+              attempts = 0;
+              setRestaurantDoc(snap.exists() ? snap.data() : null);
+              // An answer, either way — see `restaurantAnswered`. A miss is
+              // as much of an answer as a doc: it means DEFAULT_CONFIG is the
+              // truth here, rather than a guess we have not checked yet.
+              setRestaurantAnswered(true);
+            },
+            (e) => {
+              console.warn("[auth] failed to load restaurant profile:", e);
+              // The doc already held is KEPT, not nulled: a blip must not
+              // reshape a working restaurant, or open a locked one.
+              //
+              // Only after a few tries is the failure taken as an answer, so
+              // an offline tablet is not left on the splash for ever. Never
+              // while a signup batch is settling — that refusal is the race
+              // above, and answering it is the bug.
+              if (attempts >= RESTAURANT_RETRIES && !isSignupInProgress()) {
+                setRestaurantAnswered(true);
+              }
+              const delay = Math.min(1000 * 2 ** attempts, 30_000);
+              attempts += 1;
+              restaurantRetry = setTimeout(listenRestaurant, delay);
+            },
+          );
+        };
+        listenRestaurant();
       };
 
       // FIRST: which restaurant does this login belong to? A live listener
@@ -537,7 +592,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       clearResolveTimer();
       unsubIndex?.();
       unsubProfile?.();
-      unsubRestaurant?.();
+      stopRestaurant();
       unsubAuth();
     };
   }, []);
@@ -577,21 +632,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       : accountEndsAt === null
         ? tenantEndsAt
         : Math.min(tenantEndsAt, accountEndsAt);
-  const [expired, setExpired] = useState(false);
+  // DERIVED on every render, never held in state. It used to be a `useState`
+  // flipped from the effect below, which left it one render BEHIND the
+  // deadline it was computed from: the frame the restaurant doc arrived, a
+  // restaurant born locked still had `expired === false`, so `profile` was
+  // handed out and every screen that redirects on `profile` sent a brand-new
+  // owner into the app before the paywall. The effect now only exists to
+  // re-render when the clock reaches the deadline.
+  const [, recheckDeadline] = useState(0);
+  const expired = expiresAtMs !== null && expiresAtMs <= Date.now();
 
   useEffect(() => {
-    if (expiresAtMs === null) {
-      setExpired(false);
-      return;
-    }
+    if (expiresAtMs === null) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const check = () => {
       const remaining = expiresAtMs - Date.now();
       if (remaining <= 0) {
-        setExpired(true);
+        recheckDeadline((n) => n + 1);
         return;
       }
-      setExpired(false);
       timer = setTimeout(check, Math.min(remaining, MAX_TIMEOUT_MS));
     };
     check();

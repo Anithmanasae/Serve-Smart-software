@@ -83,6 +83,9 @@ import {
  *  direct the eye, not so much that the screen looks broken or disabled. */
 const DIM = 0.3;
 
+/** The longest run the receipt will quote a time for. */
+const PRAISE_WITHIN_SECONDS = 120;
+
 /** Id prefix for the invisible cells that pad the last grid row. */
 const GRID_SPACER = "__practice_spacer__";
 
@@ -115,6 +118,9 @@ export function PracticeRun({
     initialPracticeState
   );
   const [activeCategory, setActiveCategory] = useState<string>(ALL_CATEGORIES);
+  // When the run came up, for the receipt's "in 40 seconds". Lazy state
+  // rather than a ref so it is read once and never again.
+  const [startedAt] = useState(() => Date.now());
 
   // A tablet keeps the cart on screen permanently, so there is no bar to tap
   // and the step that teaches tapping it must not exist.
@@ -306,6 +312,10 @@ export function PracticeRun({
 
   // ── the receipt is its own screen ──────────────────────────────────────────
   if (state.stage === "receipt") {
+    const took =
+      state.paidAt != null
+        ? Math.max(1, Math.round((state.paidAt - startedAt) / 1000))
+        : null;
     return (
       <PracticeReceipt
         restaurantName={restaurantName}
@@ -315,6 +325,10 @@ export function PracticeRun({
         tableLabel={practiceTableLabel(state)}
         paymentLabel={state.paymentLabel}
         gstEnabled={gstEnabled}
+        kotEnabled={config.kotEnabled}
+        // Past a couple of minutes the tablet was put down, and a stopwatch
+        // on somebody's tea break is not a compliment.
+        seconds={took != null && took <= PRAISE_WITHIN_SECONDS ? took : null}
         onDone={() => onExit("finished")}
       />
     );

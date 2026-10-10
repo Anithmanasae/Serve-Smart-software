@@ -165,6 +165,10 @@ export async function setEntitlement(
       subscription: {
         autoRenew: renewal.autoRenewing,
         paidThrough: Timestamp.fromMillis(paidThrough),
+        // Play's own word for where the subscription stands, so the app can
+        // tell a declined card (grace period, account hold) from a healthy
+        // renewal or a plain lapse. Display only, like the rest of this map.
+        state: context.state,
       },
       updatedAt: FieldValue.serverTimestamp(),
     },

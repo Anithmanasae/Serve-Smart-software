@@ -52,6 +52,14 @@ export interface PracticeState {
   /** The table the run is working (null before it is picked / counter mode). */
   activeTableId: string | null;
   lines: OrderItem[];
+  /**
+   * How many lines this run has ever opened — the source of the next
+   * `lineId`. Counted rather than read off `lines.length`, because a removed
+   * line shortens the list and the next dish would then be handed an id a
+   * line still in the cart already holds: two rows, one key, and a stepper
+   * on either changing both.
+   */
+  lineSeq: number;
   kot: PracticeKot | null;
   /**
    * The cart sheet is up.
@@ -101,6 +109,7 @@ export function initialPracticeState(tablesEnabled: boolean): PracticeState {
     tables: tablesEnabled ? buildFloor() : [],
     activeTableId: null,
     lines: [],
+    lineSeq: 0,
     kot: null,
     cartOpen: false,
     paidAt: null,
@@ -184,10 +193,11 @@ export function practiceReducer(
       }
       return {
         ...state,
+        lineSeq: state.lineSeq + 1,
         lines: [
           ...state.lines,
           {
-            lineId: `practice-line-${state.lines.length + 1}`,
+            lineId: `practice-line-${state.lineSeq + 1}`,
             menuItemId: event.item.id,
             name: event.item.name,
             price: event.item.price,
@@ -259,9 +269,10 @@ export function practiceReducer(
           tableId: state.activeTableId,
           tableLabel,
           orderType,
-          // #1, because for the restaurant running this it genuinely would
-          // be. A padded number to look busier would be the one dishonest
-          // thing on an otherwise real screen.
+          // #1: on a first run it genuinely would be, and on a replay from
+          // Account it is plainly the practice ticket rather than one of
+          // theirs. A padded number to look busier would be the one
+          // dishonest thing on an otherwise real screen.
           ticketNumber: 1,
           items: state.lines.map((l) => ({
             lineId: l.lineId,

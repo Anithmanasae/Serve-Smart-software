@@ -37,6 +37,7 @@ import { app } from "@/lib/firebase";
 import { FUNCTIONS_REGION, isBillingConfigured, SUBSCRIPTION_ID } from "./config";
 import {
   acknowledge,
+  describePurchaseError,
   disconnect,
   fetchOffers,
   getExistingPurchases,
@@ -78,6 +79,12 @@ export function isBillingAvailable(): boolean {
 export function getOffers(): Promise<SubscriptionOffer[]> {
   return fetchOffers();
 }
+
+/** One Google account, one subscription — and it is stamped with the
+ *  restaurant it was bought for, so it cannot be moved to a second one. */
+const OTHER_RESTAURANT_MESSAGE =
+  "This Google account is already paying for a different Smart Serve restaurant. " +
+  "Sign in to that restaurant instead, or switch to another Google account in the Play Store and try again.";
 
 function verifyCallable() {
   return httpsCallable<
@@ -132,9 +139,30 @@ export async function subscribe(
   if (!isBillingAvailable()) {
     return { ok: false, expiresAt: null, reason: "Billing isn't available on this version of the app." };
   }
-  const result = await purchase(restaurantId, offerToken);
+  let result: PurchaseResult | null;
+  try {
+    result = await purchase(restaurantId, offerToken);
+  } catch (e) {
+    // Play's sheet ended in an error (a declined card, no connection). The
+    // library's message is about the Billing API, not about what happened.
+    console.warn("[billing] purchase failed:", e);
+    return { ok: false, expiresAt: null, reason: describePurchaseError(e) };
+  }
   if (!result) return null; // cancelled
-  return verifyAndAcknowledge(result, restaurantId);
+  try {
+    return await verifyAndAcknowledge(result, restaurantId);
+  } catch (e) {
+    // Play would not sell because this Google account is ALREADY subscribed,
+    // and the server says that subscription unlocks another restaurant. Both
+    // are right, and neither tells the owner what to do about it.
+    if (
+      result.alreadyOwned &&
+      (e as { code?: string })?.code === "functions/permission-denied"
+    ) {
+      return { ok: false, expiresAt: null, reason: OTHER_RESTAURANT_MESSAGE };
+    }
+    throw e;
+  }
 }
 
 /**

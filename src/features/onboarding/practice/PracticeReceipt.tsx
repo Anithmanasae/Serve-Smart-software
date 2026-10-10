@@ -32,6 +32,7 @@ import { useEffect, useRef } from "react";
 import { Animated, Easing, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialCommunityIcons } from "@expo/vector-icons";
+import { Confetti } from "@/components/Confetti";
 import { PressableScale } from "@/components/PressableScale";
 import { colors, fonts, radius, shadow, space } from "@/theme/theme";
 import { feel } from "@/lib/feedback";
@@ -46,6 +47,18 @@ export interface PracticeReceiptProps {
   tableLabel: string;
   paymentLabel: string | null;
   gstEnabled: boolean;
+  /** This restaurant fires a kitchen ticket — the headline names the kitchen
+   *  only for an owner who has just been through one. */
+  kotEnabled: boolean;
+  /**
+   * How long the owner took, first screen to payment — or `null` when it is
+   * not worth saying (they wandered off mid-run).
+   *
+   * This is the one figure on the page they did NOT type. The total is an
+   * order they invented; the time is a measurement of them, and "a whole
+   * order in 40 seconds" is the thing they came here unsure about.
+   */
+  seconds: number | null;
   onDone: () => void;
 }
 
@@ -57,6 +70,8 @@ export function PracticeReceipt({
   tableLabel,
   paymentLabel,
   gstEnabled,
+  kotEnabled,
+  seconds,
   onDone,
 }: PracticeReceiptProps) {
   const t = useRef(new Animated.Value(0)).current;
@@ -79,7 +94,14 @@ export function PracticeReceipt({
       >
         <Text style={styles.eyebrow}>THAT IS THE WHOLE JOB</Text>
         <Text style={styles.headline}>
-          Order, kitchen, bill — and this comes out.
+          {seconds != null
+            ? `You just took a whole order in ${seconds} seconds.`
+            : "You just took a whole order."}
+        </Text>
+        <Text style={styles.sub}>
+          {kotEnabled
+            ? "Order, kitchen, bill — and this comes out."
+            : "Order, bill — and this comes out."}
         </Text>
 
         <Animated.View
@@ -108,7 +130,10 @@ export function PracticeReceipt({
           <View style={styles.slipRule} />
 
           <View style={styles.slipMetaRow}>
-            <Text style={styles.slipMeta}>Bill #1</Text>
+            {/* Not a number. This run is replayable from Account for ever,
+                and "Bill #1" in a restaurant on its four-hundredth is a
+                figure the owner can check and find wrong. */}
+            <Text style={styles.slipMeta}>Practice bill</Text>
             <Text style={styles.slipMeta}>{tableLabel}</Text>
           </View>
 
@@ -171,8 +196,8 @@ export function PracticeReceipt({
             color={colors.textMuted}
           />
           <Text style={styles.safeText}>
-            That was practice — nothing was saved and your figures are still
-            at zero.
+            That was practice — nothing was saved and your figures have not
+            changed.
           </Text>
         </View>
 
@@ -192,6 +217,9 @@ export function PracticeReceipt({
           />
         </PressableScale>
       </ScrollView>
+      {/* After the slip has landed, so the paper is what is being celebrated
+          rather than an empty page. Over everything, and takes no touches. */}
+      <Confetti delay={260} />
     </SafeAreaView>
   );
 }
@@ -215,6 +243,15 @@ const styles = StyleSheet.create({
     color: colors.text,
     textAlign: "center",
     maxWidth: 340,
+  },
+  sub: {
+    marginTop: space.s2,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    textAlign: "center",
+    maxWidth: 320,
   },
 
   // Deliberately paper-like: square corners, mono figures, a narrow column.

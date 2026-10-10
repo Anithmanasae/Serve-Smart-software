@@ -18,8 +18,6 @@ import { DEMO_MODE, FIREBASE_PROJECT_ID } from "@/lib/firebase";
 import { AuthDivider, GoogleButton } from "@/features/auth/GoogleButton";
 import { isGoogleAuthAvailable } from "@/lib/googleAuth";
 import { feel } from "@/lib/feedback";
-// ONBOARDING_PREVIEW (temporary — see PreviewOnboardingButton for how to remove)
-import { PreviewOnboardingButton } from "@/features/onboarding/PreviewOnboardingButton";
 import { colors, space, radius } from "@/theme/theme";
 
 /**
@@ -201,9 +199,6 @@ export default function Login() {
               <Text style={styles.joinTextBold}>Enter your join code</Text>
             </Text>
           </Pressable>
-
-          {/* ONBOARDING_PREVIEW (temporary) */}
-          <PreviewOnboardingButton />
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

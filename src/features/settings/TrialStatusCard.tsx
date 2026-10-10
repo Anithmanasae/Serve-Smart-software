@@ -93,6 +93,36 @@ export function TrialStatusCard() {
     accessEndsAt >= paidThroughMs &&
     accessEndsAt - paidThroughMs <= 2 * 24 * 60 * 60 * 1000;
 
+  // IN A GRACE PERIOD the restaurant is still open and Google is still
+  // retrying — but the card was DECLINED, and when the retries run out the
+  // app locks. "Subscription active · Renews on…" over that is the one
+  // moment the owner could have fixed it, spent saying everything is fine.
+  if (
+    subscription?.state === "SUBSCRIPTION_STATE_IN_GRACE_PERIOD" &&
+    describesDeadline
+  ) {
+    return (
+      <View style={[styles.card, styles.cardUrgent]}>
+        <View style={styles.header}>
+          <Text style={styles.icon}>⚠️</Text>
+          <View style={styles.headerText}>
+            <Text style={[styles.title, styles.titleUrgent]}>
+              Payment failed
+            </Text>
+            <Text style={[styles.remaining, styles.remainingUrgent]}>
+              Update your payment method
+            </Text>
+          </View>
+        </View>
+        <Text style={styles.body}>
+          Google Play couldn't charge your payment method and is still
+          trying. To keep your restaurant open, fix it in the Play Store: tap
+          your profile picture, then Payments and subscriptions.
+        </Text>
+      </View>
+    );
+  }
+
   if (subscription?.autoRenew && describesDeadline && paidThroughMs !== null) {
     return (
       <View style={styles.card}>
