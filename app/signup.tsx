@@ -25,6 +25,7 @@ import { isGoogleAuthAvailable } from "@/lib/googleAuth";
 import { isBillingAvailable } from "@/lib/billing";
 import { usePendingSetup } from "@/features/onboarding/pendingSetup";
 import { colors, fonts, space, radius, shadow } from "@/theme/theme";
+import { capture } from "@/lib/analytics";
 
 /**
  * The front door: a restaurant OWNER registering their own workspace.
@@ -205,6 +206,7 @@ export default function Signup() {
         setPending(null);
         return;
       }
+      capture("restaurant_registered", { method: "google" });
       router.replace("/");
     } catch (e) {
       fail(friendlyAuthError(e));
@@ -241,6 +243,7 @@ export default function Signup() {
         password,
         toE164(phone),
       );
+      capture("restaurant_registered", { method: "email" });
       // The owner is a self-approved cashier → straight into the app.
       router.replace("/");
     } catch (e) {

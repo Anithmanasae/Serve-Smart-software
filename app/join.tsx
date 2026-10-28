@@ -15,6 +15,7 @@ import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { feel } from "@/lib/feedback";
 import { colors, space, radius } from "@/theme/theme";
+import { capture } from "@/lib/analytics";
 
 /**
  * Staff joining an existing restaurant with the code their manager gave them.
@@ -74,6 +75,7 @@ export default function Join() {
     setBusy(true);
     try {
       await joinRestaurant(joinCode, name.trim(), email.trim(), password, role);
+      capture("staff_signup_submitted", { role });
       // Staff wait on the live "waiting for approval" screen.
       router.replace("/pending");
     } catch (e) {

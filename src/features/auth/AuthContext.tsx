@@ -43,6 +43,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -57,6 +58,7 @@ import {
 import { AppState } from "react-native";
 import { getDoc, onSnapshot } from "firebase/firestore";
 import { auth, RESTAURANT_ID } from "@/lib/firebase";
+import { identifyUser, resetAnalytics } from "@/lib/analytics";
 import { paths, setActiveRestaurantId } from "@/lib/firestore/paths";
 import {
   AWAITING_SUBSCRIPTION_MS,
@@ -716,6 +718,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       gate = "restricted";
     }
   }
+
+  // Analytics: tie events to the signed-in person (uid + role + restaurant
+  // only — no names or emails). Uses the raw profile so owners stuck on the
+  // paywall are identified too. Reset only on a real signed-in → signed-out
+  // change, not on every cold start while logged out.
+  const identifiedUid = useRef<string | null>(null);
+  useEffect(() => {
+    if (rawProfile && restaurantId) {
+      identifyUser(rawProfile.uid, rawProfile.role, restaurantId);
+      identifiedUid.current = rawProfile.uid;
+    } else if (!firebaseUser && identifiedUid.current) {
+      resetAnalytics();
+      identifiedUid.current = null;
+    }
+  }, [firebaseUser, rawProfile?.uid, rawProfile?.role, restaurantId]);
 
   const value: AuthState = {
     firebaseUser,

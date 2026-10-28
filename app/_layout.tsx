@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { Stack, useSegments } from "expo-router";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Stack, usePathname, useSegments } from "expo-router";
+import { PostHogProvider } from "posthog-react-native";
 import { StatusBar } from "expo-status-bar";
 import { Ionicons } from "@expo/vector-icons";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -16,6 +17,7 @@ import { AuthProvider, useAuth } from "@/features/auth/AuthContext";
 import { SettingsProvider } from "@/features/settings/SettingsContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { BootSplash } from "@/components/BrandSplash";
+import { captureScreen, posthog } from "@/lib/analytics";
 
 // Off-screen routes stop re-rendering on Firestore snapshots (with the tab
 // navigator's freezeOnBlur) — must be set before any screen renders.
@@ -55,6 +57,30 @@ function BootReporter({ onArrived }: { onArrived: () => void }) {
   return null;
 }
 
+/** expo-router hides the NavigationContainer, so PostHog can't auto-capture
+ *  screens — record a screen view whenever the route changes instead. */
+function ScreenTracker() {
+  const pathname = usePathname();
+  useEffect(() => {
+    if (pathname) captureScreen(pathname);
+  }, [pathname]);
+  return null;
+}
+
+/** Only mounts PostHog when a key is configured (see src/lib/analytics.ts). */
+function Analytics({ children }: { children: ReactNode }) {
+  if (!posthog) return <>{children}</>;
+  return (
+    <PostHogProvider
+      client={posthog}
+      autocapture={{ captureScreens: false, captureTouches: false }}
+    >
+      <ScreenTracker />
+      {children}
+    </PostHogProvider>
+  );
+}
+
 export default function RootLayout() {
   // Load the Plus Jakarta Sans family once, app-wide. Nothing below mounts
   // until the glyphs are ready (or the load has failed) so text never flashes
@@ -83,28 +109,30 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      {/* The splash sits INSIDE the boundary so a crash during boot replaces
-          it with the recovery screen instead of hiding that screen behind it. */}
-      <ErrorBoundary>
-        {/* Light icons while the navy is up, dark once the app is showing. */}
-        <StatusBar style={arrived ? "dark" : "light"} />
-        {fontsReady && (
-          <AuthProvider>
-            <SettingsProvider>
-              <Stack
-                screenOptions={{
-                  headerShown: false,
-                  // The redirects that happen under the splash must not
-                  // animate: the dissolve would reveal a screen mid-slide.
-                  animation: splashGone ? "default" : "none",
-                }}
-              />
-              <BootReporter onArrived={onArrived} />
-            </SettingsProvider>
-          </AuthProvider>
-        )}
-        {!splashGone && <BootSplash leaving={arrived} onGone={onGone} />}
-      </ErrorBoundary>
+      <Analytics>
+        {/* The splash sits INSIDE the boundary so a crash during boot replaces
+            it with the recovery screen instead of hiding that screen behind it. */}
+        <ErrorBoundary>
+          {/* Light icons while the navy is up, dark once the app is showing. */}
+          <StatusBar style={arrived ? "dark" : "light"} />
+          {fontsReady && (
+            <AuthProvider>
+              <SettingsProvider>
+                <Stack
+                  screenOptions={{
+                    headerShown: false,
+                    // The redirects that happen under the splash must not
+                    // animate: the dissolve would reveal a screen mid-slide.
+                    animation: splashGone ? "default" : "none",
+                  }}
+                />
+                <BootReporter onArrived={onArrived} />
+              </SettingsProvider>
+            </AuthProvider>
+          )}
+          {!splashGone && <BootSplash leaving={arrived} onGone={onGone} />}
+        </ErrorBoundary>
+      </Analytics>
     </SafeAreaProvider>
   );
 }
