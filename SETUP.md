@@ -108,6 +108,28 @@ Routes through Expo's tunnel so any network works; scan the QR the same way.
 
 ---
 
+## 5. Product analytics (PostHog, optional)
+
+Add your PostHog **project token** (Project settings → Project token, starts
+with `phc_`) to `.env.local`:
+
+```
+EXPO_PUBLIC_POSTHOG_KEY=phc_...
+EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
+```
+
+Restart with `npx expo start -c`. Leave the key blank and analytics is off.
+
+What's sent (see `src/lib/analytics.ts`): screen views, app open/background,
+and `restaurant_registered`, `staff_signup_submitted`, `kot_sent`,
+`bill_generated`, `bill_settled`. People are identified by Firebase uid with
+`role` + `restaurant_id` only — no names or emails.
+
+> PostHog adds native modules (expo-device, expo-application, …). Expo Go has
+> them already; for EAS/installed builds, make a **new build** after this change.
+
+---
+
 ## Troubleshooting
 
 - **"Component auth has not been registered yet"** — Metro cache; run

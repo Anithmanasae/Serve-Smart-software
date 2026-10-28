@@ -34,6 +34,7 @@ import {
   useBillableOrders,
 } from "./useCashierData";
 import { BillDetail } from "./BillDetail";
+import { capture } from "@/lib/analytics";
 
 type BillRow = { kind: "bill"; bill: Bill & { id: string } };
 type OrderRow = { kind: "order"; order: Order & { id: string } };
@@ -121,6 +122,7 @@ export function BillsScreen() {
         orderLabel(order),
         gstEnabled
       );
+      capture("bill_generated", { order_type: order.orderType, from: "bills" });
       setSelectedBillId(billId);
     } catch (e) {
       Alert.alert("Could not bill", e instanceof Error ? e.message : String(e));

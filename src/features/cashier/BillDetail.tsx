@@ -43,6 +43,7 @@ import {
 } from "@/lib/receiptText";
 import { reprintBill, settleBill } from "./cashierApi";
 import { useBill, useOrder } from "./useCashierData";
+import { capture } from "@/lib/analytics";
 
 const PAYMENT_TILES: { mode: PaymentMode; label: string; icon: string }[] = [
   { mode: "cash", label: "Cash", icon: "💵" },
@@ -104,6 +105,12 @@ export function BillDetail({
     tapFeedback();
     void run("settle", async () => {
       await settleBill(bill, order, selectedMode);
+      capture("bill_settled", {
+        payment_mode: selectedMode,
+        order_type: order.orderType,
+        grand_total_paise: bill.grandTotal,
+        gst_paise: bill.gstTotal,
+      });
       onClose();
     });
   }

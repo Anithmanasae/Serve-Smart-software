@@ -74,6 +74,7 @@ import {
 import { OrderMenuCard } from "./OrderMenuCard";
 import { OrderLineRow } from "./OrderLineRow";
 import { KotAlertBanner, useKotStatusAlerts } from "./kotAlerts";
+import { capture } from "@/lib/analytics";
 
 const ALL = "__all__";
 const SPACER = "__spacer__";
@@ -295,6 +296,12 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       // local (latency-compensated) edit has landed there first.
       await flushPendingWrites();
       const kotId = await sendKot(orderId, tableLabel);
+      if (kotId) {
+        capture("kot_sent", {
+          order_type: order?.orderType ?? null,
+          line_count: pendingCount,
+        });
+      }
       // Fire-and-forget: the KOT is already committed, a printer problem must
       // never block or undo the send (the on-screen KDS still has the ticket).
       if (kotId) void autoPrintKot(kotId);
@@ -346,6 +353,10 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
     try {
       await flushPendingWrites();
       const id = await generateBill(order, waiterId, tableLabel, gstEnabled);
+      // generateBill reopens an existing bill — only count the first time.
+      if (!order.billId) {
+        capture("bill_generated", { order_type: order.orderType, from: "counter" });
+      }
       setBillId(id);
     } catch (e) {
       Alert.alert(
