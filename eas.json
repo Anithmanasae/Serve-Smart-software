@@ -16,11 +16,19 @@
       "environment": "preview",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_POSTHOG_KEY": "phc_sWWiqycJajBmHmivZfkbkarewhXbyz7EjT9YCkTj5QTq",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
       }
     },
     "production": {
       "autoIncrement": true,
-      "environment": "production"
+      "environment": "production",
+      "env": {
+        "EXPO_PUBLIC_POSTHOG_KEY": "phc_sWWiqycJajBmHmivZfkbkarewhXbyz7EjT9YCkTj5QTq",
+        "EXPO_PUBLIC_POSTHOG_HOST": "https://us.i.posthog.com"
+      }
     }
   },
   "submit": {
