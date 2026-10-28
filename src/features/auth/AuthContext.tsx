@@ -23,6 +23,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -34,6 +35,7 @@ import {
 } from "firebase/auth";
 import { getDoc, onSnapshot } from "firebase/firestore";
 import { auth, RESTAURANT_ID } from "@/lib/firebase";
+import { identifyUser, resetAnalytics } from "@/lib/analytics";
 import { paths, setActiveRestaurantId } from "@/lib/firestore/paths";
 import {
   isSignupInProgress,
@@ -207,6 +209,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       gate = "restricted";
     }
   }
+
+  // Analytics: tie events to the signed-in staff member (uid + role +
+  // restaurant only), and forget them on sign-out. Reset only on a real
+  // signed-in → signed-out change, not on every cold start while logged out.
+  const identifiedUid = useRef<string | null>(null);
+  useEffect(() => {
+    if (profile && restaurantId) {
+      identifyUser(profile.uid, profile.role, restaurantId);
+      identifiedUid.current = profile.uid;
+    } else if (!firebaseUser && identifiedUid.current) {
+      resetAnalytics();
+      identifiedUid.current = null;
+    }
+  }, [firebaseUser, profile?.uid, profile?.role, restaurantId]);
 
   const value: AuthState = {
     firebaseUser,

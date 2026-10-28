@@ -50,7 +50,8 @@
             "kotlinVersion": "1.9.25"
           }
         }
-      ]
+      ],
+      "expo-localization"
     ],
     "extra": {
       "router": {

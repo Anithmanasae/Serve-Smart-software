@@ -14,6 +14,7 @@ import { useAuth, type SignupRole } from "@/features/auth/AuthContext";
 import { friendlyAuthError } from "@/features/auth/authErrors";
 import { homePathForRole } from "@/features/auth/roleRoutes";
 import { colors, space, radius } from "@/theme/theme";
+import { capture } from "@/lib/analytics";
 
 type Mode = "create" | "join";
 
@@ -74,10 +75,12 @@ export default function Signup() {
           email.trim(),
           password,
         );
+        capture("restaurant_registered");
         // The owner is a self-approved cashier → straight into the app.
         router.replace("/");
       } else {
         await joinRestaurant(joinCode, name.trim(), email.trim(), password, role);
+        capture("staff_signup_submitted", { role });
         // Staff wait on the live "waiting for approval" screen.
         router.replace("/pending");
       }
