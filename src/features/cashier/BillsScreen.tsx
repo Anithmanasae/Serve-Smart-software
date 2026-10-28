@@ -55,6 +55,7 @@ import {
   useBillableOrders,
 } from "./useCashierData";
 import { BillDetail } from "./BillDetail";
+import { capture } from "@/lib/analytics";
 
 type BillRow = { kind: "bill"; bill: Bill & { id: string } };
 type OrderRow = { kind: "order"; order: Order & { id: string } };
@@ -171,6 +172,7 @@ export function BillsScreen() {
         config.kotEnabled
       );
       feel.success(); // the bill exists; the settle sheet opens on top
+      capture("bill_generated", { order_type: order.orderType, from: "bills" });
       setSelectedBillId(billId);
     } catch (e) {
       feel.error();

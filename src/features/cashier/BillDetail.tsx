@@ -63,6 +63,7 @@ import {
 } from "@/lib/receiptText";
 import { reprintBill, settleBill, voidBill } from "./cashierApi";
 import { useBill, useOrder } from "./useCashierData";
+import { capture } from "@/lib/analytics";
 
 const PAYMENT_TILES: { mode: PaymentMode; label: string; icon: string }[] = [
   { mode: "cash", label: "Cash", icon: "💵" },
@@ -177,6 +178,12 @@ export function BillDetail({
     feel.press();
     void run("settle", async () => {
       await settleBill(bill, order, settlement);
+      capture("bill_settled", {
+        settlement: settlement.kind, // "paid" or "nc" (no charge)
+        payment_mode: settlement.kind === "paid" ? settlement.mode : null,
+        order_type: order.orderType,
+        grand_total_paise: bill.grandTotal,
+      });
       // Taking payment is the end of the whole flow and the sheet closes
       // straight after, so the confirm is the only acknowledgement the
       // cashier gets that the money actually landed.

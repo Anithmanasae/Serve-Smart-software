@@ -92,6 +92,7 @@ import {
   shadow,
   space,
 } from "@/theme/theme";
+import { capture } from "@/lib/analytics";
 
 /** What one subscription buys, as two columns read across. Every line is
  *  something the app does today — a paywall that promises a feature the owner
@@ -315,6 +316,7 @@ export function SubscribeScreen() {
     setNotice(null);
     setBusy(true);
     try {
+      capture("subscription_purchase_started");
       const res = await subscribe(restaurantId, chosen.offerToken);
       if (res === null) {
         // Dismissed Play's sheet — an ordinary outcome, say nothing.
@@ -325,6 +327,7 @@ export function SubscribeScreen() {
         return;
       }
       if (!res.ok) {
+        capture("subscription_purchase_failed");
         feel.error();
         setError(res.reason ?? "That didn't go through. Please try again.");
         return;
@@ -332,6 +335,7 @@ export function SubscribeScreen() {
       // Success is NOT navigated from here. The server has written the
       // paid-through date; AuthContext's restaurant listener picks it up and
       // the redirect below takes over, on every device at once.
+      capture("subscription_purchased", { has_trial: !!chosen.trialPeriod });
       feel.success();
     } catch (e) {
       feel.error();

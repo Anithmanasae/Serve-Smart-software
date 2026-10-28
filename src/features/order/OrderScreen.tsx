@@ -86,6 +86,7 @@ import { OrderCartPanel } from "./OrderCartPanel";
 import { ALL_CATEGORIES, OrderCategoryRail } from "./OrderCategoryRail";
 import { CustomizeDishSheet, type CustomizeResult } from "./CustomizeDishSheet";
 import { KotAlertBanner, useKotStatusAlerts } from "./kotAlerts";
+import { capture } from "@/lib/analytics";
 
 const ALL = ALL_CATEGORIES;
 const SPACER = "__spacer__";
@@ -629,6 +630,12 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
       // local (latency-compensated) edit has landed there first.
       await flushPendingWrites();
       const kotId = await sendKot(orderId, tableLabel);
+      if (kotId) {
+        capture("kot_sent", {
+          order_type: order?.orderType ?? null,
+          line_count: pendingCount,
+        });
+      }
       feel.success(); // the kitchen has it — this is the beat that means it
       // Fire-and-forget: the KOT is already committed, a printer problem must
       // never block or undo the send (the on-screen KDS still has the ticket).
@@ -693,6 +700,10 @@ export function OrderScreen({ tableId }: { tableId?: string }) {
         config.kotEnabled
       );
       feel.success(); // the bill exists — the settle sheet is about to open
+      // generateBill reopens an existing bill — only count the first time.
+      if (!order.billId) {
+        capture("bill_generated", { order_type: order.orderType, from: "counter" });
+      }
       setBillId(id);
     } catch (e) {
       feel.error();
